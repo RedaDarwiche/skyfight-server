@@ -73,27 +73,30 @@ io.on('connection', (socket) => {
     });
 
     // When a player updates their stats
-    socket.on('playerUpdate', (data) => {
-        if (players[socket.id]) {
-            players[socket.id].size = data.size;
-            players[socket.id].tier = data.tier;
-            players[socket.id].hp = data.hp;
-            players[socket.id].xp = data.xp;
-            players[socket.id].color = data.color;
-            players[socket.id].animalType = data.animalType;
+    // When a player updates their stats
+socket.on('playerUpdate', (data) => {
+    if (players[socket.id]) {
+        players[socket.id].size = data.size;
+        players[socket.id].tier = data.tier;
+        players[socket.id].hp = data.hp;
+        players[socket.id].xp = data.xp;
+        players[socket.id].color = data.color;
+        players[socket.id].animalType = data.animalType;
+        players[socket.id].animalIndex = data.animalIndex;
 
-            // Broadcast to all other players
-            socket.broadcast.emit('playerUpdated', {
-                id: socket.id,
-                size: data.size,
-                tier: data.tier,
-                hp: data.hp,
-                xp: data.xp,
-                color: data.color,
-                animalType: data.animalType
-            });
-        }
-    });
+        // Broadcast to all other players
+        socket.broadcast.emit('playerUpdated', {
+            id: socket.id,
+            size: data.size,
+            tier: data.tier,
+            hp: data.hp,
+            xp: data.xp,
+            color: data.color,
+            animalType: data.animalType,
+            animalIndex: data.animalIndex
+        });
+    }
+});
 
     // When a player hits another player
 socket.on('playerHit', (data) => {
