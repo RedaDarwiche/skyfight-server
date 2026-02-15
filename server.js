@@ -95,11 +95,20 @@ io.on('connection', (socket) => {
         }
     });
 
-    // When a player dies
-    socket.on('playerDied', () => {
-        socket.broadcast.emit('playerDeath', socket.id);
-        delete players[socket.id];
+    // When a player hits another player
+socket.on('playerHit', (data) => {
+    // Tell the target player they got hit
+    io.to(data.targetId).emit('gotHit', {
+        attackerId: socket.id,
+        damage: data.damage
     });
+});
+
+// When a player dies
+socket.on('playerDied', () => {
+    socket.broadcast.emit('playerDeath', socket.id);
+    delete players[socket.id];
+});
 
     // When a player disconnects
     socket.on('disconnect', () => {
