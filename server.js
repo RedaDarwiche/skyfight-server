@@ -32,6 +32,14 @@ io.on('connection', (socket) => {
 
     // When a player joins the game
     socket.on('playerJoin', (data) => {
+        // Check if a player with this name already exists
+        const existingPlayer = Object.values(players).find(p => p.name === data.name);
+        if (existingPlayer) {
+            socket.emit('joinError', { message: 'A player with this name is already in the game!' });
+            console.log(`Blocked duplicate join attempt: ${data.name}`);
+            return;
+        }
+        
         players[socket.id] = {
             id: socket.id,
             x: data.x || 4000,
@@ -97,7 +105,18 @@ socket.on('playerUpdate', (data) => {
         });
     }
 });
+// When a player sends a chat message
+socket.on('chatMessage', (data) => {
+    socket.broadcast.emit('chatMessage', {
+        text: data.text,
+        playerName: data.playerName
+    });
+});
 
+// When a player damages a bot
+socket.on('botDamaged', (data) => {
+    socket.broadcast.emit('botDamaged', data);
+});
     // When a player hits another player
 socket.on('playerHit', (data) => {
     // Tell the target player they got hit
