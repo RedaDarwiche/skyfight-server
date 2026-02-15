@@ -5,7 +5,6 @@ const cors = require('cors');
 
 const app = express();
 
-// Enable CORS for all routes
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST'],
@@ -24,36 +23,31 @@ const io = socketIo(server, {
 
 const PORT = process.env.PORT || 3000;
 
-// Store all connected players
 const players = {};
+const activeBots = {}; // NEW - Server tracks all bots
+let botIdCounter = 0;
 
 io.on('connection', (socket) => {
     console.log('New player connected:', socket.id);
 
-    // When a player joins the game
-    // When a player joins the game
     socket.on('playerJoin', (data) => {
-        // Check if this user account is already connected
         if (data.userId) {
             const existingUser = Object.values(players).find(p => p.userId === data.userId);
             if (existingUser) {
                 socket.emit('joinError', { message: 'You are already connected on another tab/browser!' });
-                console.log(`Blocked duplicate account: ${data.userId}`);
                 return;
             }
         }
         
-        // Also check if a player with this name already exists
         const existingPlayer = Object.values(players).find(p => p.name === data.name);
         if (existingPlayer) {
             socket.emit('joinError', { message: 'A player with this name is already in the game!' });
-            console.log(`Blocked duplicate join attempt: ${data.name}`);
             return;
         }
         
         players[socket.id] = {
             id: socket.id,
-            userId: data.userId || null, // ADD THIS LINE
+            userId: data.userId || null,
             x: data.x || 4000,
             y: data.y || 4000,
             angle: data.angle || 0,
@@ -66,23 +60,19 @@ io.on('connection', (socket) => {
             animalType: data.animalType || 'Mouse'
         };
 
-        // Send current players to the new player
         socket.emit('currentPlayers', players);
-
-        // Tell all other players about the new player
+        socket.emit('existingBots', activeBots); // NEW - Send existing bots
         socket.broadcast.emit('newPlayer', players[socket.id]);
 
         console.log(`Player ${data.name} joined the game`);
     });
 
-    // When a player moves
     socket.on('playerMove', (data) => {
         if (players[socket.id]) {
             players[socket.id].x = data.x;
             players[socket.id].y = data.y;
             players[socket.id].angle = data.angle;
 
-            // Broadcast to all other players
             socket.broadcast.emit('playerMoved', {
                 id: socket.id,
                 x: data.x,
@@ -92,69 +82,161 @@ io.on('connection', (socket) => {
         }
     });
 
-    // When a player updates their stats
-    // When a player updates their stats
-socket.on('playerUpdate', (data) => {
-    if (players[socket.id]) {
-        players[socket.id].size = data.size;
-        players[socket.id].tier = data.tier;
-        players[socket.id].hp = data.hp;
-        players[socket.id].xp = data.xp;
-        players[socket.id].color = data.color;
-        players[socket.id].animalType = data.animalType;
-        players[socket.id].animalIndex = data.animalIndex;
+    socket.on('playerUpdate', (data) => {
+        if (players[socket.id]) {
+            players[socket.id].size = data.size;
+            players[socket.id].tier = data.tier;
+            players[socket.id].hp = data.hp;
+            players[socket.id].xp = data.xp;
+            players[socket.id].color = data.color;
+            players[socket.id].animalType = data.animalType;
+            players[socket.id].animalIndex = data.animalIndex;
 
-        // Broadcast to all other players
-        socket.broadcast.emit('playerUpdated', {
-            id: socket.id,
-            size: data.size,
-            tier: data.tier,
-            hp: data.hp,
-            xp: data.xp,
-            color: data.color,
-            animalType: data.animalType,
-            animalIndex: data.animalIndex
+            socket.broadcast.emit('playerUpdated', {
+                id: socket.id,
+                size: data.size,
+                tier: data.tier,
+                hp: data.hp,
+                xp: data.xp,
+                color: data.color,
+                animalType: data.animalType,
+                animalIndex: data.animalIndex
+            });
+        }
+    });
+
+    socket.on('chatMessage', (data) => {
+        socket.broadcast.emit('chatMessage', {
+            text: data.text,
+            playerName: data.playerName
         });
-    }
-});
-// When a player sends a chat message
-socket.on('chatMessage', (data) => {
-    socket.broadcast.emit('chatMessage', {
-        text: data.text,
-        playerName: data.playerName
     });
-});
 
-// When a player damages a bot
-socket.on('botDamaged', (data) => {
-    socket.broadcast.emit('botDamaged', data);
-});
-    // When a player hits another player
-socket.on('playerHit', (data) => {
-    // Tell the target player they got hit
-    io.to(data.targetId).emit('gotHit', {
-        attackerId: socket.id,
-        damage: data.damage
+    // === NEW BOT EVENTS ===
+    socket.on('botSpawned', (data) => {
+        // Use client-provided botId or generate one if not provided
+        const botId = data.botId || ('bot_' + botIdCounter++);
+        
+        // Store bot in server state
+        activeBots[botId] = {
+            id: botId,
+            x: data.x,
+            y: data.y,
+            tier: data.tier || 1,
+            animalIndex: data.animalIndex || 0,
+            hp: data.hp || 100,
+            maxHp: data.maxHp || 100,
+            isDead: false,
+            ownerId: socket.id // Track which player spawned this bot
+        };
+        
+        // Send bot ID confirmation to spawner (in case server generated it)
+        socket.emit('botSpawnConfirmed', { botId: botId, serverBot: activeBots[botId] });
+        
+        // Broadcast to other players
+        socket.broadcast.emit('remoteBotSpawned', activeBots[botId]);
     });
-});
 
-// When a player dies
-socket.on('playerDied', () => {
-    socket.broadcast.emit('playerDeath', socket.id);
-    delete players[socket.id];
-});
+    socket.on('botMoved', (data) => {
+        if (!data.botId) {
+            console.error('botMoved: Missing botId');
+            return;
+        }
+        if (activeBots[data.botId]) {
+            activeBots[data.botId].x = data.x;
+            activeBots[data.botId].y = data.y;
+            activeBots[data.botId].angle = data.angle;
+            socket.broadcast.emit('remoteBotMoved', {
+                botId: data.botId,
+                x: data.x,
+                y: data.y,
+                angle: data.angle
+            });
+        } else {
+            console.warn(`botMoved: Bot ${data.botId} not found in activeBots`);
+        }
+    });
 
-    // When a player disconnects
+    socket.on('botDamaged', (data) => {
+        if (!data.botId) {
+            console.error('botDamaged: Missing botId');
+            return;
+        }
+        if (activeBots[data.botId]) {
+            activeBots[data.botId].hp = data.hp;
+            socket.broadcast.emit('remoteBotDamaged', {
+                botId: data.botId,
+                hp: data.hp,
+                damage: data.damage
+            });
+        } else {
+            console.warn(`botDamaged: Bot ${data.botId} not found in activeBots`);
+        }
+    });
+
+    socket.on('botDied', (data) => {
+        if (!data.botId) {
+            console.error('botDied: Missing botId');
+            return;
+        }
+        if (activeBots[data.botId]) {
+            activeBots[data.botId].isDead = true;
+            socket.broadcast.emit('remoteBotDied', { botId: data.botId });
+        } else {
+            console.warn(`botDied: Bot ${data.botId} not found in activeBots`);
+        }
+    });
+
+    socket.on('botRespawned', (data) => {
+        if (!data.botId) {
+            console.error('botRespawned: Missing botId');
+            return;
+        }
+        if (activeBots[data.botId]) {
+            activeBots[data.botId] = {
+                ...activeBots[data.botId],
+                x: data.x,
+                y: data.y,
+                isDead: false,
+                hp: data.hp,
+                tier: data.tier,
+                animalIndex: data.animalIndex
+            };
+            socket.broadcast.emit('remoteBotRespawned', activeBots[data.botId]);
+        } else {
+            console.warn(`botRespawned: Bot ${data.botId} not found in activeBots`);
+        }
+    });
+
+    socket.on('playerHit', (data) => {
+        io.to(data.targetId).emit('gotHit', {
+            attackerId: socket.id,
+            damage: data.damage
+        });
+    });
+
+    socket.on('playerDied', () => {
+        socket.broadcast.emit('playerDeath', socket.id);
+        delete players[socket.id];
+    });
+
     socket.on('disconnect', () => {
         console.log('Player disconnected:', socket.id);
+        
+        // Remove player's bots when they disconnect
+        const playerBots = Object.keys(activeBots).filter(botId => activeBots[botId].ownerId === socket.id);
+        playerBots.forEach(botId => {
+            delete activeBots[botId];
+            socket.broadcast.emit('remoteBotRemoved', { botId });
+        });
+        
         delete players[socket.id];
         socket.broadcast.emit('playerDisconnected', socket.id);
     });
 });
 
-// Health check endpoint
 app.get('/', (req, res) => {
-    res.send('SkyFight.io Server Running! Connected players: ' + Object.keys(players).length);
+    res.send('SkyFight.io Server Running! Players: ' + Object.keys(players).length + ' | Bots: ' + Object.keys(activeBots).length);
 });
 
 server.listen(PORT, () => {
