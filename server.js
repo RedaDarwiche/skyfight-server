@@ -31,8 +31,19 @@ io.on('connection', (socket) => {
     console.log('New player connected:', socket.id);
 
     // When a player joins the game
+    // When a player joins the game
     socket.on('playerJoin', (data) => {
-        // Check if a player with this name already exists
+        // Check if this user account is already connected
+        if (data.userId) {
+            const existingUser = Object.values(players).find(p => p.userId === data.userId);
+            if (existingUser) {
+                socket.emit('joinError', { message: 'You are already connected on another tab/browser!' });
+                console.log(`Blocked duplicate account: ${data.userId}`);
+                return;
+            }
+        }
+        
+        // Also check if a player with this name already exists
         const existingPlayer = Object.values(players).find(p => p.name === data.name);
         if (existingPlayer) {
             socket.emit('joinError', { message: 'A player with this name is already in the game!' });
@@ -42,6 +53,7 @@ io.on('connection', (socket) => {
         
         players[socket.id] = {
             id: socket.id,
+            userId: data.userId || null, // ADD THIS LINE
             x: data.x || 4000,
             y: data.y || 4000,
             angle: data.angle || 0,
