@@ -14,88 +14,120 @@ const io = socketIo(server, {
 const PORT = process.env.PORT || 3000;
 const MAP_SIZE = 4000;
 
-// Game State
 const players = {};
 const projectiles = {};
 const powerups = {};
 let projectileId = 0;
 let powerupId = 0;
 
-// Config
 const MAX_POWERUPS = 50;
-const POWER_TYPES = ['dash', 'shield', 'tripleshot', 'speed', 'teleport', 'invisible'];
+const POWER_TYPES = [
+    'dash', 'shield', 'tripleshot', 'speed', 'teleport', 'invisible', 'timeslow',
+    'magnet', 'ghost', 'rage', 'freeze', 'laser', 'clone', 'gravity', 'shock'
+];
+
+const POWER_DURATIONS = {
+    shield: 6000,
+    speed: 8000,
+    invisible: 5000,
+    ghost: 7000,
+    rage: 6000,
+    magnet: 10000
+};
 
 function spawnPowerup() {
     const id = `pu_${powerupId++}`;
     const type = POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)];
-    powerups[id] = {
-        id: id,
-        x: Math.random() * MAP_SIZE,
-        y: Math.random() * MAP_SIZE,
-        type: type
+    powerups[id] = { 
+        id, 
+        x: Math.random() * MAP_SIZE, 
+        y: Math.random() * MAP_SIZE, 
+        type 
     };
     io.emit('powerupSpawn', powerups[id]);
 }
 
-// Initial Spawn
 for (let i = 0; i < MAX_POWERUPS; i++) spawnPowerup();
 
-app.get('/', (req, res) => {
-    res.send(`PowerSwap.io Server Running! Players online: ${Object.keys(players).length}`);
-});
-
 io.on('connection', (socket) => {
-    console.log('Player joined:', socket.id);
+    console.log('Player connected:', socket.id);
 
-    socket.on('playerJoin', (data) => {
+    socket.on('join', (data) => {
         players[socket.id] = {
             id: socket.id,
-            name: (data.name || 'Player').substring(0, 15),
+            name: data.name,
             x: Math.random() * MAP_SIZE,
             y: Math.random() * MAP_SIZE,
             angle: 0,
             hp: 100,
             maxHp: 100,
-            color: '#4facfe',
             currentPower: null,
-            score: 0,
-            isAdmin: (data.email === 'redadarwichepaypal@gmail.com')
+            powerEndTime: null,
+            score: 0
         };
 
-        socket.emit('initGame', { 
-            players, 
-            powerups, 
-            id: socket.id 
+        socket.emit('init', {
+            player: players[socket.id],
+            players: players,
+            projectiles: projectiles,
+            powerups: powerups
         });
-        socket.broadcast.emit('newPlayer', players[socket.id]);
+
+        socket.broadcast.emit('playerJoined', players[socket.id]);
     });
 
-    socket.on('playerMove', (data) => {
+    socket.on('move', (data) => {
         if (players[socket.id]) {
-            const p = players[socket.id];
-            p.x = data.x;
-            p.y = data.y;
-            p.angle = data.angle;
-            
-            // Check Powerup Collision
-            for (let id in powerups) {
-                const pu = powerups[id];
-                const dist = Math.hypot(p.x - pu.x, p.y - pu.y);
-                if (dist < 40) {
-                    p.currentPower = pu.type;
-                    delete powerups[id];
-                    io.emit('powerupTaken', { id: id, playerId: socket.id, type: pu.type });
-                    spawnPowerup();
-                    break; 
-                }
-            }
+            players[socket.id].x = data.x;
+            players[socket.id].y = data.y;
+            players[socket.id].angle = data.angle;
+            io.emit('playerMoved', { id: socket.id, x: data.x, y: data.y, angle: data.angle });
+        }
+    });
 
-            socket.broadcast.emit('playerMoved', { 
-                id: socket.id, 
-                x: p.x, 
-                y: p.y, 
-                angle: p.angle 
-            });
+    socket.on('shoot', (data) => {
+        const p = players[socket.id];
+        if (!p) return;
+
+        const shootProjectile = (angleOffset = 0) => {
+            const id = `proj_${projectileId++}`;
+            const speed = p.currentPower === 'rage' ? 12 : 8;
+            projectiles[id] = {
+                id,
+                x: p.x,
+                y: p.y,
+                vx: Math.cos(p.angle + angleOffset) * speed,
+                vy: Math.sin(p.angle + angleOffset) * speed,
+                owner: socket.id,
+                pierce: p.currentPower === 'laser'
+            };
+            io.emit('projectileSpawned', projectiles[id]);
+        };
+
+        if (p.currentPower === 'tripleshot') {
+            shootProjectile(-0.2);
+            shootProjectile(0);
+            shootProjectile(0.2);
+        } else {
+            shootProjectile();
+        }
+    });
+
+    socket.on('powerupTaken', (data) => {
+        if (powerups[data.id]) {
+            const p = players[socket.id];
+            if (p) {
+                p.currentPower = powerups[data.id].type;
+                
+                if (POWER_DURATIONS[p.currentPower]) {
+                    p.powerEndTime = Date.now() + POWER_DURATIONS[p.currentPower];
+                }
+                
+                io.emit('powerupTaken', data.id);
+                delete powerups[data.id];
+                
+                setTimeout(() => spawnPowerup(), 3000);
+            }
         }
     });
 
@@ -103,35 +135,53 @@ io.on('connection', (socket) => {
         const p = players[socket.id];
         if (!p || !p.currentPower) return;
 
-        io.emit('powerUsed', { playerId: socket.id, type: p.currentPower, data: data });
-
-        if (p.currentPower === 'tripleshot') {
-            for(let i = -1; i <= 1; i++) {
-                const angle = p.angle + (i * 0.2);
-                const pid = `proj_${projectileId++}`;
-                projectiles[pid] = {
-                    id: pid,
-                    owner: socket.id,
-                    x: p.x + Math.cos(angle) * 30,
-                    y: p.y + Math.sin(angle) * 30,
-                    vx: Math.cos(angle) * 15,
-                    vy: Math.sin(angle) * 15,
-                    life: 60
-                };
-                io.emit('projectileSpawn', projectiles[pid]);
+        const onUsePowers = ['dash', 'teleport', 'tripleshot', 'timeslow', 'freeze', 'clone', 'gravity', 'shock'];
+        
+        if (onUsePowers.includes(p.currentPower)) {
+            if (p.currentPower === 'timeslow') {
+                io.emit('timeSlowActivated', { activator: socket.id });
+            } else if (p.currentPower === 'freeze') {
+                io.emit('freezeActivated', { activator: socket.id, x: p.x, y: p.y });
+            } else if (p.currentPower === 'clone') {
+                io.emit('cloneActivated', { activator: socket.id, x: p.x, y: p.y });
+            } else if (p.currentPower === 'gravity') {
+                io.emit('gravityActivated', { activator: socket.id, x: p.x, y: p.y });
             }
+            
+            p.currentPower = null;
+            p.powerEndTime = null;
         }
     });
 
     socket.on('playerHit', (data) => {
         if (players[data.targetId]) {
-            players[data.targetId].hp -= data.damage;
-            io.to(data.targetId).emit('gotHit', { damage: data.damage, attackerId: socket.id });
-
+            let damage = data.damage || 20;
+            
+            if (players[data.targetId].currentPower === 'shield') {
+                damage = Math.floor(damage / 2);
+            }
+            
+            if (players[data.targetId].currentPower === 'ghost') {
+                damage = 0;
+            }
+            
+            players[data.targetId].hp -= damage;
+            
             if (players[data.targetId].hp <= 0) {
-                io.emit('playerDied', { id: data.targetId, killerId: socket.id });
-                if(players[socket.id]) players[socket.id].score += 100;
-                delete players[data.targetId];
+                players[data.targetId].hp = 0;
+                io.emit('playerDied', data.targetId);
+                
+                setTimeout(() => {
+                    if (players[data.targetId]) {
+                        players[data.targetId].hp = 100;
+                        players[data.targetId].x = Math.random() * MAP_SIZE;
+                        players[data.targetId].y = Math.random() * MAP_SIZE;
+                        players[data.targetId].currentPower = null;
+                        io.emit('playerUpdate', players[data.targetId]);
+                    }
+                }, 3000);
+            } else {
+                io.emit('playerUpdate', players[data.targetId]);
             }
         }
     });
@@ -141,45 +191,77 @@ io.on('connection', (socket) => {
     });
 
     socket.on('adminCommand', (cmd) => {
-        const p = players[socket.id];
-        if (!p || !p.isAdmin) {
-            socket.emit('chatMessage', { playerName: 'Server', text: 'Access denied' });
-            return;
-        }
-
+        console.log('Admin command:', cmd);
+        
         if (cmd === 'spawn50') {
             for (let i = 0; i < 50; i++) spawnPowerup();
         } else if (cmd === 'clearpowerups') {
-            powerups = {};
+            Object.keys(powerups).forEach(id => delete powerups[id]);
             io.emit('clearPowerups');
         } else if (cmd === 'resetgame') {
-            powerups = {};
-            io.emit('clearPowerups');
-            console.log('Game reset by admin');
+            Object.keys(players).forEach(id => {
+                players[id].hp = 100;
+                players[id].currentPower = null;
+                players[id].score = 0;
+            });
+            Object.keys(projectiles).forEach(id => delete projectiles[id]);
+            Object.keys(powerups).forEach(id => delete powerups[id]);
+            for (let i = 0; i < MAX_POWERUPS; i++) spawnPowerup();
+            io.emit('gameReset');
         } else if (cmd === 'spawnbot') {
-            console.log('Bot spawn not implemented yet');
+            const botId = `bot_${Date.now()}`;
+            players[botId] = {
+                id: botId,
+                name: 'TestBot',
+                x: Math.random() * MAP_SIZE,
+                y: Math.random() * MAP_SIZE,
+                angle: 0,
+                hp: 100,
+                maxHp: 100,
+                currentPower: null,
+                score: 0
+            };
+            io.emit('playerJoined', players[botId]);
         }
     });
 
     socket.on('disconnect', () => {
+        console.log('Player disconnected:', socket.id);
         delete players[socket.id];
-        io.emit('playerDisconnected', socket.id);
+        io.emit('playerLeft', socket.id);
     });
 });
 
-// Server Loop for Projectiles
 setInterval(() => {
-    for (let id in projectiles) {
-        const p = projectiles[id];
-        p.x += p.vx;
-        p.y += p.vy;
-        p.life--;
-        if (p.life <= 0) {
+    const updates = [];
+    Object.keys(projectiles).forEach(id => {
+        const proj = projectiles[id];
+        proj.x += proj.vx;
+        proj.y += proj.vy;
+        
+        if (proj.x < 0 || proj.x > MAP_SIZE || proj.y < 0 || proj.y > MAP_SIZE) {
             delete projectiles[id];
+            io.emit('projectileRemoved', id);
+        } else {
+            updates.push(proj);
         }
+    });
+    
+    if (updates.length > 0) {
+        io.emit('projectileUpdate', updates);
     }
-}, 1000 / 60);
+    
+    Object.keys(players).forEach(id => {
+        const p = players[id];
+        if (p.powerEndTime && Date.now() > p.powerEndTime) {
+            p.currentPower = null;
+            p.powerEndTime = null;
+            io.emit('powerExpired', { playerId: id });
+        }
+    });
+}, 50);
 
 server.listen(PORT, () => {
-    console.log(`PowerSwap Server running on port ${PORT}`);
+    console.log('PowerSwap.io server running on port ' + PORT);
+    console.log('Available powers: ' + POWER_TYPES.join(', '));
 });
