@@ -4,382 +4,171 @@ const socketIo = require('socket.io');
 const cors = require('cors');
 
 const app = express();
-
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST'],
-    credentials: true
-}));
+app.use(cors({ origin: '*' }));
 
 const server = http.createServer(app);
 const io = socketIo(server, {
-    cors: {
-        origin: '*',
-        methods: ['GET', 'POST'],
-        credentials: true
-    },
-    transports: ['websocket', 'polling']
+    cors: { origin: '*', methods: ['GET', 'POST'] }
 });
 
 const PORT = process.env.PORT || 3000;
+const MAP_SIZE = 4000;
 
-// Bot management constants
-const MAX_BOTS = 30;
-const MAP_SIZE = 8000;
-
+// Game State
 const players = {};
-const activeBots = {};
-let botIdCounter = 0;
+const projectiles = {};
+const powerups = {};
+let projectileId = 0;
+let powerupId = 0;
 
-// Admin email whitelist
-const ADMIN_EMAILS = ['redadarwichepaypal@gmail.com'];
+// Config
+const MAX_POWERUPS = 50;
+const POWER_TYPES = ['dash', 'shield', 'tripleshot', 'speed', 'teleport', 'invisible'];
+
+function spawnPowerup() {
+    const id = `pu_${powerupId++}`;
+    const type = POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)];
+    powerups[id] = {
+        id: id,
+        x: Math.random() * MAP_SIZE,
+        y: Math.random() * MAP_SIZE,
+        type: type
+    };
+    io.emit('powerupSpawn', powerups[id]);
+}
+
+// Initial Spawn
+for (let i = 0; i < MAX_POWERUPS; i++) spawnPowerup();
 
 io.on('connection', (socket) => {
-    console.log('New player connected:', socket.id);
+    console.log('Player joined:', socket.id);
 
     socket.on('playerJoin', (data) => {
-        if (data.userId) {
-            const existingUser = Object.values(players).find(p => p.userId === data.userId);
-            if (existingUser) {
-                socket.emit('joinError', { message: 'You are already connected on another tab/browser!' });
-                return;
-            }
-        }
-        
-        const existingPlayer = Object.values(players).find(p => p.name === data.name);
-        if (existingPlayer) {
-            socket.emit('joinError', { message: 'A player with this name is already in the game!' });
-            return;
-        }
-        
-        // Validate and truncate input data
-        const sanitizedName = (data.name || 'Player').substring(0, 20);
-        const clampedX = Math.max(0, Math.min(MAP_SIZE, data.x || 4000));
-        const clampedY = Math.max(0, Math.min(MAP_SIZE, data.y || 4000));
-        
         players[socket.id] = {
             id: socket.id,
-            userId: data.userId || null,
-            email: data.email || null, // Store for admin verification
-            x: clampedX,
-            y: clampedY,
-            angle: data.angle || 0,
-            name: sanitizedName,
-            color: data.color || '#ff6b6b',
-            size: data.size || 30,
-            tier: data.tier || 1,
-            hp: data.hp || 100,
-            maxHp: data.hp || 100,
-            xp: data.xp || 0,
-            animalType: data.animalType || 'Mouse',
-            animalIndex: data.animalIndex || 0
+            name: (data.name || 'Player').substring(0, 15),
+            x: Math.random() * MAP_SIZE,
+            y: Math.random() * MAP_SIZE,
+            angle: 0,
+            hp: 100,
+            maxHp: 100,
+            color: '#4facfe',
+            currentPower: null, // The Twist: Holding one power
+            score: 0,
+            isAdmin: false,
+            email: data.email
         };
 
-        socket.emit('currentPlayers', players);
-        socket.emit('existingBots', activeBots);
-        socket.broadcast.emit('newPlayer', players[socket.id]);
+        // Check Admin
+        if (data.email === 'redadarwichepaypal@gmail.com') {
+            players[socket.id].isAdmin = true;
+        }
 
-        console.log(`Player ${sanitizedName} joined as ${data.animalType} (index: ${data.animalIndex})`);
+        socket.emit('initGame', { 
+            players, 
+            powerups, 
+            id: socket.id 
+        });
+        socket.broadcast.emit('newPlayer', players[socket.id]);
     });
 
     socket.on('playerMove', (data) => {
         if (players[socket.id]) {
-            // Clamp coordinates to prevent out-of-bounds exploits
-            players[socket.id].x = Math.max(0, Math.min(MAP_SIZE, data.x));
-            players[socket.id].y = Math.max(0, Math.min(MAP_SIZE, data.y));
-            players[socket.id].angle = data.angle;
+            const p = players[socket.id];
+            p.x = data.x;
+            p.y = data.y;
+            p.angle = data.angle;
+            
+            // Check Powerup Collision
+            for (let id in powerups) {
+                const pu = powerups[id];
+                const dist = Math.hypot(p.x - pu.x, p.y - pu.y);
+                if (dist < 40) { // Pickup radius
+                    p.currentPower = pu.type; // SWAP POWER
+                    delete powerups[id];
+                    io.emit('powerupTaken', { id: id, playerId: socket.id, type: pu.type });
+                    spawnPowerup(); // Replenish
+                    break; 
+                }
+            }
 
-            socket.broadcast.emit('playerMoved', {
-                id: socket.id,
-                x: players[socket.id].x,
-                y: players[socket.id].y,
-                angle: data.angle
+            // Broadcast movement (throttled in production, raw here for responsiveness)
+            socket.broadcast.emit('playerMoved', { 
+                id: socket.id, 
+                x: p.x, 
+                y: p.y, 
+                angle: p.angle 
             });
         }
     });
 
-    socket.on('playerUpdate', (data) => {
-        if (players[socket.id]) {
-            players[socket.id].size = data.size;
-            players[socket.id].tier = data.tier;
-            players[socket.id].hp = data.hp;
-            players[socket.id].maxHp = data.maxHp || data.hp;
-            players[socket.id].xp = data.xp;
-            players[socket.id].color = data.color;
-            players[socket.id].animalType = data.animalType;
-            players[socket.id].animalIndex = data.animalIndex;
+    socket.on('usePower', (data) => {
+        const p = players[socket.id];
+        if (!p || !p.currentPower) return;
 
-            socket.broadcast.emit('playerUpdated', {
-                id: socket.id,
-                size: data.size,
-                tier: data.tier,
-                hp: data.hp,
-                maxHp: data.maxHp || data.hp,
-                xp: data.xp,
-                color: data.color,
-                animalType: data.animalType,
-                animalIndex: data.animalIndex,
-                hasShield: data.hasShield,
-                hasRage: data.hasRage,
-                hasSpeedBoost: data.hasSpeedBoost,
-                isInvisible: data.isInvisible
-            });
+        // Broadcast effect
+        io.emit('powerUsed', { playerId: socket.id, type: p.currentPower, data: data });
+
+        // Logic for projectiles
+        if (p.currentPower === 'tripleshot') {
+            for(let i=-1; i<=1; i++) {
+                const angle = p.angle + (i * 0.2);
+                const pid = `proj_${projectileId++}`;
+                projectiles[pid] = {
+                    id: pid,
+                    owner: socket.id,
+                    x: p.x + Math.cos(angle) * 30,
+                    y: p.y + Math.sin(angle) * 30,
+                    vx: Math.cos(angle) * 15,
+                    vy: Math.sin(angle) * 15,
+                    life: 60
+                };
+                io.emit('projectileSpawn', projectiles[pid]);
+            }
+        }
+
+        // Consume power (The Twist: You use it, you might keep it based on cooldown, 
+        // but for this game mode, let's keep it until swapped or have cooldowns on client)
+    });
+
+    socket.on('playerHit', (data) => {
+        // Basic authoritative damage validation would go here
+        if (players[data.targetId]) {
+            players[data.targetId].hp -= data.damage;
+            io.to(data.targetId).emit('gotHit', { damage: data.damage, attackerId: socket.id });
+            io.emit('playerUpdate', { id: data.targetId, hp: players[data.targetId].hp });
+
+            if (players[data.targetId].hp <= 0) {
+                io.emit('playerDied', { id: data.targetId, killerId: socket.id });
+                if(players[socket.id]) players[socket.id].score += 100;
+                delete players[data.targetId];
+            }
         }
     });
 
     socket.on('chatMessage', (data) => {
-        // Sanitize chat messages
-        const sanitizedText = (data.text || '').substring(0, 200);
-        const sanitizedName = (data.playerName || 'Player').substring(0, 20);
-        
-        socket.broadcast.emit('chatMessage', {
-            text: sanitizedText,
-            playerName: sanitizedName
-        });
-    });
-
-    socket.on('botSpawned', (data) => {
-        const botId = data.botId || ('bot_' + botIdCounter++);
-        
-        activeBots[botId] = {
-            id: botId,
-            x: Math.max(0, Math.min(MAP_SIZE, data.x)),
-            y: Math.max(0, Math.min(MAP_SIZE, data.y)),
-            tier: data.tier || 1,
-            animalIndex: data.animalIndex || 0,
-            hp: data.hp || 100,
-            maxHp: data.maxHp || 100,
-            isDead: false,
-            ownerId: socket.id
-        };
-        
-        socket.emit('botSpawnConfirmed', { botId: botId, serverBot: activeBots[botId] });
-        socket.broadcast.emit('remoteBotSpawned', activeBots[botId]);
-    });
-
-    socket.on('botMoved', (data) => {
-        if (!data.botId) {
-            console.error('botMoved: Missing botId');
-            return;
-        }
-        if (activeBots[data.botId]) {
-            activeBots[data.botId].x = Math.max(0, Math.min(MAP_SIZE, data.x));
-            activeBots[data.botId].y = Math.max(0, Math.min(MAP_SIZE, data.y));
-            activeBots[data.botId].angle = data.angle;
-            socket.broadcast.emit('remoteBotMoved', {
-                botId: data.botId,
-                x: activeBots[data.botId].x,
-                y: activeBots[data.botId].y,
-                angle: data.angle
-            });
-        }
-    });
-
-    socket.on('botDamaged', (data) => {
-        if (!data.botId) {
-            console.error('botDamaged: Missing botId');
-            return;
-        }
-        if (activeBots[data.botId]) {
-            activeBots[data.botId].hp = data.hp;
-            socket.broadcast.emit('remoteBotDamaged', {
-                botId: data.botId,
-                hp: data.hp,
-                damage: data.damage
-            });
-        }
-    });
-
-    socket.on('botDied', (data) => {
-        if (!data.botId) {
-            console.error('botDied: Missing botId');
-            return;
-        }
-        if (activeBots[data.botId]) {
-            activeBots[data.botId].isDead = true;
-            socket.broadcast.emit('remoteBotDied', { botId: data.botId });
-        }
-    });
-
-    socket.on('botRespawned', (data) => {
-        if (!data.botId) {
-            console.error('botRespawned: Missing botId');
-            return;
-        }
-        if (activeBots[data.botId]) {
-            activeBots[data.botId] = {
-                ...activeBots[data.botId],
-                x: Math.max(0, Math.min(MAP_SIZE, data.x)),
-                y: Math.max(0, Math.min(MAP_SIZE, data.y)),
-                isDead: false,
-                hp: data.hp,
-                tier: data.tier,
-                animalIndex: data.animalIndex
-            };
-            socket.broadcast.emit('remoteBotRespawned', activeBots[data.botId]);
-        }
-    });
-
-    socket.on('playerHit', (data) => {
-        io.to(data.targetId).emit('gotHit', {
-            attackerId: socket.id,
-            damage: data.damage
-        });
-    });
-
-    socket.on('playerDied', (data) => {
-        const deadPlayer = players[socket.id];
-        if (deadPlayer) {
-            // Broadcast death BEFORE deleting
-            socket.broadcast.emit('playerDeath', {
-                playerId: socket.id,
-                xp: data.xp || deadPlayer.xp || 0,
-                tier: data.tier || deadPlayer.tier || 1,
-                x: data.x || deadPlayer.x,
-                y: data.y || deadPlayer.y
-            });
-            
-            // Small delay before deleting to ensure message is sent
-            setTimeout(() => {
-                delete players[socket.id];
-            }, 100);
-        }
-    });
-
-    // ADMIN COMMANDS - Server-side verification
-    socket.on('adminCommand', (data) => {
-        const player = players[socket.id];
-        if (!player) return;
-        
-        // Verify admin status (in production, use proper server-side auth)
-        if (!ADMIN_EMAILS.includes(player.email)) {
-            console.log('Unauthorized admin command attempt from:', player.email);
-            return;
-        }
-        
-        console.log('Admin command executed:', data.command, 'by', player.email);
-        
-        switch(data.command) {
-            case 'killBots':
-                Object.keys(activeBots).forEach(key => {
-                    activeBots[key].isDead = true;
-                    activeBots[key].hp = 0;
-                });
-                io.emit('allBotsKilled');
-                break;
-                
-            case 'clearBots':
-                Object.keys(activeBots).forEach(key => {
-                    delete activeBots[key];
-                });
-                io.emit('allBotsCleared');
-                break;
-        }
-    });
-
-    // STATUS EFFECT APPLICATION - Server relays status effects to target players
-    socket.on('applyStatus', (data) => {
-        if (data.targetId && players[data.targetId]) {
-            io.to(data.targetId).emit('statusApplied', {
-                type: data.type,
-                duration: data.duration,
-                sourceId: socket.id
-            });
-        }
+        io.emit('chatMessage', data); // Echo to all
     });
 
     socket.on('disconnect', () => {
-        console.log('Player disconnected:', socket.id);
-        
-        const disconnectedPlayer = players[socket.id];
-        
-        // FIXED: Drop loot if player disconnects while alive
-        if (disconnectedPlayer && disconnectedPlayer.hp > 0) {
-            io.emit('playerDeath', {
-                playerId: socket.id,
-                xp: disconnectedPlayer.xp || 0,
-                tier: disconnectedPlayer.tier || 1,
-                x: disconnectedPlayer.x,
-                y: disconnectedPlayer.y
-            });
-        }
-        
-        // Remove player's bots when they disconnect
-        const playerBots = Object.keys(activeBots).filter(botId => activeBots[botId].ownerId === socket.id);
-        playerBots.forEach(botId => {
-            delete activeBots[botId];
-            socket.broadcast.emit('remoteBotRemoved', { botId });
-        });
-        
         delete players[socket.id];
-        socket.broadcast.emit('playerDisconnected', socket.id);
+        io.emit('playerDisconnected', socket.id);
     });
 });
 
-// SERVER-SIDE BOT MANAGEMENT (Future implementation)
-// Uncomment this section to move bots to server-side
-/*
+// Server Loop for Projectiles
 setInterval(() => {
-    // 1. Respawn bots if low
-    const currentBotCount = Object.keys(activeBots).length;
-    if (currentBotCount < MAX_BOTS) {
-        const botId = 'server_bot_' + botIdCounter++;
-        activeBots[botId] = {
-            id: botId,
-            x: Math.random() * MAP_SIZE,
-            y: Math.random() * MAP_SIZE,
-            angle: Math.random() * Math.PI * 2,
-            tier: Math.floor(Math.random() * 3) + 1,
-            animalIndex: 0,
-            hp: 100,
-            maxHp: 100,
-            isDead: false,
-            targetX: Math.random() * MAP_SIZE,
-            targetY: Math.random() * MAP_SIZE,
-            ownerId: 'server'
-        };
-        io.emit('remoteBotSpawned', activeBots[botId]);
-    }
-
-    // 2. Move Bots (Simple AI on server)
-    Object.values(activeBots).forEach(bot => {
-        if (bot.isDead || bot.ownerId !== 'server') return;
-
-        // Simple wandering logic
-        const dx = bot.targetX - bot.x;
-        const dy = bot.targetY - bot.y;
-        const dist = Math.sqrt(dx*dx + dy*dy);
-        
-        if (dist < 50) {
-            bot.targetX = Math.random() * MAP_SIZE;
-            bot.targetY = Math.random() * MAP_SIZE;
-        } else {
-            const angle = Math.atan2(dy, dx);
-            const speed = 3;
-            bot.x += Math.cos(angle) * speed;
-            bot.y += Math.sin(angle) * speed;
-            bot.angle = angle;
+    for (let id in projectiles) {
+        const p = projectiles[id];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life--;
+        if (p.life <= 0) {
+            delete projectiles[id];
         }
-    });
-
-    // 3. Send Bot updates to all players (20 times per second)
-    io.emit('botUpdates', Object.values(activeBots)
-        .filter(b => b.ownerId === 'server')
-        .map(b => ({
-            id: b.id, 
-            x: Math.round(b.x), 
-            y: Math.round(b.y), 
-            angle: b.angle
-        }))
-    );
-
-}, 1000 / 20); // 20 Ticks per second
-*/
-
-app.get('/', (req, res) => {
-    res.send('SkyFight.io Server Running! Players: ' + Object.keys(players).length + ' | Bots: ' + Object.keys(activeBots).length);
-});
+    }
+}, 1000 / 60);
 
 server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`PowerSwap Server running on port ${PORT}`);
 });
