@@ -17,6 +17,7 @@ const MAP_SIZE = 4000;
 // State
 const players = {};
 const powerups = {};
+const activeSessions = {}; // Track active userIds to prevent duplicates
 let powerupId = 0;
 
 // Match these exactly to your Frontend POWERS list
@@ -48,8 +49,24 @@ io.on('connection', (socket) => {
     console.log('Player connected:', socket.id);
 
     socket.on('join', (data) => {
+        // Check for duplicate session
+        if (data.userId && activeSessions[data.userId]) {
+            console.log(`Duplicate session blocked for userId: ${data.userId}`);
+            socket.emit('duplicateSession', { 
+                message: 'This account is already playing in another session!' 
+            });
+            socket.disconnect(true);
+            return;
+        }
+
+        // Register this session
+        if (data.userId) {
+            activeSessions[data.userId] = socket.id;
+        }
+
         players[socket.id] = {
             id: socket.id,
+            userId: data.userId || null, // Store userId for tracking
             name: data.name.substring(0, 15),
             x: Math.random() * (MAP_SIZE - 200) + 100,
             y: Math.random() * (MAP_SIZE - 200) + 100,
@@ -69,6 +86,9 @@ io.on('connection', (socket) => {
             powerups: powerups,
             projectiles: {} // Client handles projectiles
         });
+
+        // Emit success event
+        socket.emit('joinSuccess');
 
         // Tell others a new player joined
         socket.broadcast.emit('playerJoined', players[socket.id]);
@@ -169,6 +189,12 @@ io.on('connection', (socket) => {
     // DISCONNECT
     socket.on('disconnect', () => {
         console.log('Player disconnected:', socket.id);
+        
+        // Remove from active sessions if they had a userId
+        if (players[socket.id] && players[socket.id].userId) {
+            delete activeSessions[players[socket.id].userId];
+        }
+        
         delete players[socket.id];
         io.emit('playerLeft', socket.id);
     });
