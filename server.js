@@ -40,6 +40,10 @@ function spawnPowerup() {
 // Initial Spawn
 for (let i = 0; i < MAX_POWERUPS; i++) spawnPowerup();
 
+app.get('/', (req, res) => {
+    res.send(`PowerSwap.io Server Running! Players online: ${Object.keys(players).length}`);
+});
+
 io.on('connection', (socket) => {
     console.log('Player joined:', socket.id);
 
@@ -53,16 +57,10 @@ io.on('connection', (socket) => {
             hp: 100,
             maxHp: 100,
             color: '#4facfe',
-            currentPower: null, // The Twist: Holding one power
+            currentPower: null,
             score: 0,
-            isAdmin: false,
-            email: data.email
+            isAdmin: (data.email === 'redadarwichepaypal@gmail.com')
         };
-
-        // Check Admin
-        if (data.email === 'redadarwichepaypal@gmail.com') {
-            players[socket.id].isAdmin = true;
-        }
 
         socket.emit('initGame', { 
             players, 
@@ -83,16 +81,15 @@ io.on('connection', (socket) => {
             for (let id in powerups) {
                 const pu = powerups[id];
                 const dist = Math.hypot(p.x - pu.x, p.y - pu.y);
-                if (dist < 40) { // Pickup radius
-                    p.currentPower = pu.type; // SWAP POWER
+                if (dist < 40) {
+                    p.currentPower = pu.type;
                     delete powerups[id];
                     io.emit('powerupTaken', { id: id, playerId: socket.id, type: pu.type });
-                    spawnPowerup(); // Replenish
+                    spawnPowerup();
                     break; 
                 }
             }
 
-            // Broadcast movement (throttled in production, raw here for responsiveness)
             socket.broadcast.emit('playerMoved', { 
                 id: socket.id, 
                 x: p.x, 
@@ -106,12 +103,10 @@ io.on('connection', (socket) => {
         const p = players[socket.id];
         if (!p || !p.currentPower) return;
 
-        // Broadcast effect
         io.emit('powerUsed', { playerId: socket.id, type: p.currentPower, data: data });
 
-        // Logic for projectiles
         if (p.currentPower === 'tripleshot') {
-            for(let i=-1; i<=1; i++) {
+            for(let i = -1; i <= 1; i++) {
                 const angle = p.angle + (i * 0.2);
                 const pid = `proj_${projectileId++}`;
                 projectiles[pid] = {
@@ -126,17 +121,12 @@ io.on('connection', (socket) => {
                 io.emit('projectileSpawn', projectiles[pid]);
             }
         }
-
-        // Consume power (The Twist: You use it, you might keep it based on cooldown, 
-        // but for this game mode, let's keep it until swapped or have cooldowns on client)
     });
 
     socket.on('playerHit', (data) => {
-        // Basic authoritative damage validation would go here
         if (players[data.targetId]) {
             players[data.targetId].hp -= data.damage;
             io.to(data.targetId).emit('gotHit', { damage: data.damage, attackerId: socket.id });
-            io.emit('playerUpdate', { id: data.targetId, hp: players[data.targetId].hp });
 
             if (players[data.targetId].hp <= 0) {
                 io.emit('playerDied', { id: data.targetId, killerId: socket.id });
@@ -147,7 +137,28 @@ io.on('connection', (socket) => {
     });
 
     socket.on('chatMessage', (data) => {
-        io.emit('chatMessage', data); // Echo to all
+        io.emit('chatMessage', data);
+    });
+
+    socket.on('adminCommand', (cmd) => {
+        const p = players[socket.id];
+        if (!p || !p.isAdmin) {
+            socket.emit('chatMessage', { playerName: 'Server', text: 'Access denied' });
+            return;
+        }
+
+        if (cmd === 'spawn50') {
+            for (let i = 0; i < 50; i++) spawnPowerup();
+        } else if (cmd === 'clearpowerups') {
+            powerups = {};
+            io.emit('clearPowerups');
+        } else if (cmd === 'resetgame') {
+            powerups = {};
+            io.emit('clearPowerups');
+            console.log('Game reset by admin');
+        } else if (cmd === 'spawnbot') {
+            console.log('Bot spawn not implemented yet');
+        }
     });
 
     socket.on('disconnect', () => {
