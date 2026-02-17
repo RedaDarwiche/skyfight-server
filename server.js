@@ -30,11 +30,9 @@ const POWER_TYPES = [
     'vampire', 'rage', 'tank', 'magnet', 'thorns', 'regeneration', 
     'tripleshot', 'laser', 'rocket', 'scatter', 'sniper', 'minigun', 
     'explosive', 'freeze', 'poison', 'lightning',
-    'timebomb', 'orbitallaser', 'shadowclone', 'frostnova', 'bloodpact', 
-    'warpgate', 'chainsplit', 'voidbeam',
-    // NEW POWERS
-    'reflect', 'gravity', 'phantom', 'overcharge', 'ricochet'
-    // NOTE: 'phoenix' intentionally removed
+    'timebomb', 'orbitallaser', 'shadowclone', 'frostnova',
+    'warpgate', 'voidbeam', 'gravitypull', 'timestop', 'mirror', 'chaos'
+    // NOTE: 'baby' intentionally excluded - spawned via admin/special only
 ];
 
 // Spawn powerup
