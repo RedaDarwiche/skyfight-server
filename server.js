@@ -31,7 +31,7 @@ const POWER_TYPES = [
     'tripleshot', 'laser', 'rocket', 'scatter', 'sniper', 'minigun', 
     'explosive', 'freeze', 'poison', 'lightning',
     'timebomb', 'orbitallaser', 'shadowclone', 'frostnova',
-    'warpgate', 'voidbeam', 'gravitypull', 'timestop', 'mirror', 'chaos'
+    'warpgate', 'voidbeam', 'gravitypull', 'mirror', 'chaos'
     // NOTE: 'baby' intentionally excluded - spawned via admin/special only
 ];
 
