@@ -34,6 +34,7 @@ const POWER_TYPES = [
     'warpgate', 'chainsplit', 'voidbeam',
     // NEW POWERS
     'reflect', 'gravity', 'phantom', 'overcharge', 'ricochet'
+    // NOTE: 'phoenix' intentionally removed
 ];
 
 // Spawn powerup
