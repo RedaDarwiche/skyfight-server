@@ -30,8 +30,8 @@ const POWER_TYPES = [
     'vampire', 'rage', 'tank', 'magnet', 'thorns', 'regeneration', 
     'tripleshot', 'laser', 'rocket', 'scatter', 'sniper', 'minigun', 
     'explosive', 'freeze', 'poison', 'lightning',
-    'stealth', 'gravity', 'rewind', 'burst', 'chain', 'homing', 
-    'boomerang', 'fortress', 'ghost', 'lifesteal'
+    'timebomb', 'orbitallaser', 'shadowclone', 'frostnova', 'bloodpact', 
+    'warpgate', 'chainsplit', 'voidbeam', 'necromancer', 'juggernaut'
 ];
 
 // Spawn powerup
