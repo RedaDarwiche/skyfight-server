@@ -23,7 +23,7 @@ const powerups = {};
 const activeSessions = {};
 let powerupId = 0;
 
-// Power types
+// ✅ ENHANCED: Added 5 new powers + maintained all existing powers
 const POWER_TYPES = [
     'dash', 'teleport', 'clone', 'blackhole', 'nuke', 'heal', 'emp', 
     'swap', 'shockwave', 'speed', 'phase', 'berserker', 'shield', 
@@ -31,7 +31,9 @@ const POWER_TYPES = [
     'tripleshot', 'laser', 'rocket', 'scatter', 'sniper', 'minigun', 
     'explosive', 'freeze', 'poison', 'lightning',
     'timebomb', 'orbitallaser', 'shadowclone', 'frostnova', 'bloodpact', 
-    'warpgate', 'chainsplit', 'voidbeam'
+    'warpgate', 'chainsplit', 'voidbeam',
+    // NEW POWERS
+    'reflect', 'gravity', 'phantom', 'overcharge', 'ricochet'
 ];
 
 // Spawn powerup
@@ -47,9 +49,9 @@ function spawnPowerup() {
     io.emit('powerupSpawn', powerups[id]);
 }
 
-// Initialize powerups
+// ✅ ENHANCED: Increased initial powerup spawn from 50 to 80
 console.log('Spawning initial powerups...');
-for (let i = 0; i < 50; i++) {
+for (let i = 0; i < 80; i++) {
     const id = `pu_${powerupId++}`;
     const type = POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)];
     powerups[id] = { 
@@ -119,7 +121,7 @@ io.on('connection', (socket) => {
         const playerName = String(data.name).substring(0, 15).trim() || 'Guest';
         players[socket.id] = {
             id: socket.id,
-            userId: data.userId || null,  // ✅ FIXED: was "oderId"
+            userId: data.userId || null,
             name: playerName,
             x: Math.random() * (MAP_SIZE - 200) + 100,
             y: Math.random() * (MAP_SIZE - 200) + 100,
@@ -285,13 +287,14 @@ setInterval(() => {
     }
 }, 30000);
 
-// Maintain minimum powerups
+// ✅ ENHANCED: Increased minimum powerup threshold from 30 to 50
 setInterval(() => {
-    const minPowerups = 30;
+    const minPowerups = 50;
     const currentCount = Object.keys(powerups).length;
     
     if (currentCount < minPowerups) {
         const toSpawn = minPowerups - currentCount;
+        console.log(`[POWERUP] Spawning ${toSpawn} powerups to maintain minimum (current: ${currentCount})`);
         for (let i = 0; i < toSpawn; i++) {
             spawnPowerup();
         }
@@ -307,11 +310,12 @@ process.on('SIGTERM', () => {
 
 server.listen(PORT, () => {
     console.log(`
-╔════════════════════════════════════════╗
+╔═══════════════════════════════════════╗
 ║   PowerSwap Server Running             ║
 ║   Port: ${PORT}                        ║
 ║   Map: ${MAP_SIZE}x${MAP_SIZE}         ║
-║   Powerups: ${Object.keys(powerups).length}                         ║
-╚════════════════════════════════════════╝
+║   Initial Powerups: ${Object.keys(powerups).length}                    ║
+║   Minimum Powerups: 50                 ║
+╚═══════════════════════════════════════╝
     `);
 });
