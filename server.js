@@ -31,7 +31,7 @@ const POWER_TYPES = [
     'tripleshot', 'laser', 'rocket', 'scatter', 'sniper', 'minigun', 
     'explosive', 'freeze', 'poison', 'lightning',
     'timebomb', 'orbitallaser', 'shadowclone', 'frostnova', 'bloodpact', 
-    'warpgate', 'chainsplit', 'voidbeam', 'necromancer', 'juggernaut'
+    'warpgate', 'chainsplit', 'voidbeam'
 ];
 
 // Spawn powerup
@@ -216,6 +216,26 @@ io.on('connection', (socket) => {
         const id = `drop_${Date.now()}_${socket.id}`;
         powerups[id] = { id, type: data.type, x: data.x, y: data.y };
         io.emit('powerupSpawn', powerups[id]);
+    });
+
+    // Swap positions (true position swap between two players)
+    socket.on('swapPositions', (data) => {
+        const { targetId, myOldX, myOldY } = data;
+        if (!players[socket.id] || !players[targetId]) return;
+        const targetSocket = io.sockets.sockets.get(targetId);
+        if (targetSocket && targetSocket.connected) {
+            targetSocket.emit('forceMovePlayer', { x: myOldX, y: myOldY });
+        }
+        players[targetId].x = myOldX;
+        players[targetId].y = myOldY;
+        io.emit('playerMoved', { id: targetId, x: myOldX, y: myOldY, angle: players[targetId].angle });
+    });
+
+    // Admin announcement
+    socket.on('adminAnnouncement', (data) => {
+        if (!data || !data.message) return;
+        const sanitized = String(data.message).substring(0, 150);
+        io.emit('announcement', { message: sanitized });
     });
 
     // Chat
