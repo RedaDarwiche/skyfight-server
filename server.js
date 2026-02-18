@@ -41,7 +41,7 @@ const BOSS_DROP_POWERS = [
     'blackhole', 'clone', 'baby', 'lightning', 'armageddon_drop'
 ];
 const LEGENDARY_DROPS = ['orbitallaser', 'frostnova', 'chaos', 'voidbeam', 'nuke', 'blackhole', 'clone', 'lightning'];
-const MYTHIC_DROPS = ['baby', 'phoenix', 'soulsteal', 'timewarp'];
+const MYTHIC_DROPS = ['baby', 'phoenix', 'soulsteal'];
 
 // Boss state — supports multiple simultaneous bosses
 const bosses = {};
