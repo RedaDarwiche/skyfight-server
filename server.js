@@ -67,7 +67,6 @@ function spawnBoss(label) {
     };
     console.log(`[BOSS ${label}] Spawned at (${Math.round(side.x)}, ${Math.round(side.y)})`);
     io.emit('bossSpawn', bosses[id]);
-    io.emit('announcement', { message: `⚠️ BOSS ${label} has spawned! Defeat it for legendary loot!` });
 }
 
 let bossAIInterval = null;
@@ -376,6 +375,7 @@ io.on('connection', (socket) => {
         const label = Object.values(bosses).some(b => b.label === 'A') ? 'B' : 'A';
         spawnBoss(label);
         startBossAI();
+        io.emit('announcement', { message: '⚠️ Bosses that drop Mythic/Legendary powers have spawned!' });
     });
 
     // Admin announcement
@@ -469,6 +469,7 @@ server.listen(PORT, () => {
         spawnBoss('A');
         spawnBoss('B');
         startBossAI();
+        io.emit('announcement', { message: '⚠️ Bosses that drop Mythic/Legendary powers have spawned!' });
     }, 5 * 60 * 1000);
     console.log('[BOSS] 2 Bosses spawn in 5 minutes!');
 });
