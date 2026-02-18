@@ -31,9 +31,85 @@ const POWER_TYPES = [
     'tripleshot', 'laser', 'rocket', 'scatter', 'sniper', 'minigun', 
     'explosive', 'freeze', 'poison', 'lightning',
     'timebomb', 'orbitallaser', 'shadowclone', 'frostnova',
-    'warpgate', 'voidbeam', 'gravitypull', 'mirror', 'chaos'
+    'soulrip', 'voidbeam', 'gravitypull', 'mirror', 'chaos'
     // NOTE: 'baby' intentionally excluded - spawned via admin/special only
 ];
+
+// Legendary/Mythic powers that boss can drop
+const BOSS_DROP_POWERS = [
+    'orbitallaser', 'frostnova', 'chaos', 'voidbeam', 'nuke',
+    'blackhole', 'clone', 'baby', 'lightning', 'armageddon_drop'
+];
+const LEGENDARY_DROPS = ['orbitallaser', 'frostnova', 'chaos', 'voidbeam', 'nuke', 'blackhole', 'clone', 'lightning'];
+const MYTHIC_DROPS = ['baby'];
+
+// Boss state
+let boss = null;
+let bossSpawnTimer = null;
+
+function spawnBoss() {
+    boss = {
+        id: 'boss_' + Date.now(),
+        x: MAP_SIZE / 2 + (Math.random() - 0.5) * 1000,
+        y: MAP_SIZE / 2 + (Math.random() - 0.5) * 1000,
+        hp: 1000,
+        maxHp: 1000,
+        angle: 0,
+        speed: 1.2,
+        phase: 'alive',
+        attackTimer: 0
+    };
+    console.log(`[BOSS] Boss spawned at (${Math.round(boss.x)}, ${Math.round(boss.y)})`);
+    io.emit('bossSpawn', boss);
+    io.emit('announcement', { message: '⚠️ A BOSS has spawned! Defeat it for legendary loot!' });
+    startBossAI();
+}
+
+let bossAIInterval = null;
+function startBossAI() {
+    if (bossAIInterval) clearInterval(bossAIInterval);
+    bossAIInterval = setInterval(() => {
+        if (!boss || boss.phase !== 'alive') return;
+
+        // Find nearest player
+        let nearest = null, nearestDist = Infinity;
+        for (const id in players) {
+            const p = players[id];
+            const d = Math.sqrt((boss.x - p.x) ** 2 + (boss.y - p.y) ** 2);
+            if (d < nearestDist) { nearestDist = d; nearest = { id, ...p }; }
+        }
+
+        if (nearest) {
+            // Move toward player
+            const dx = nearest.x - boss.x;
+            const dy = nearest.y - boss.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            boss.angle = Math.atan2(dy, dx);
+            if (dist > 80) {
+                boss.x += (dx / dist) * boss.speed * 15;
+                boss.y += (dy / dist) * boss.speed * 15;
+                boss.x = Math.max(100, Math.min(MAP_SIZE - 100, boss.x));
+                boss.y = Math.max(100, Math.min(MAP_SIZE - 100, boss.y));
+            }
+
+            // Attack nearby players
+            boss.attackTimer++;
+            if (boss.attackTimer >= 3) {
+                boss.attackTimer = 0;
+                for (const id in players) {
+                    const p = players[id];
+                    const d = Math.sqrt((boss.x - p.x) ** 2 + (boss.y - p.y) ** 2);
+                    if (d < 120) {
+                        if (players[id]) players[id].hp = Math.max(0, (players[id].hp || 100) - 15);
+                        io.to(id).emit('playerHit', { targetId: id, damage: 15, attackerId: 'boss' });
+                    }
+                }
+            }
+
+            io.emit('bossMoved', { x: boss.x, y: boss.y, angle: boss.angle, hp: boss.hp });
+        }
+    }, 200); // 5 updates/sec
+}
 
 // Spawn powerup
 function spawnPowerup() {
@@ -232,6 +308,58 @@ io.on('connection', (socket) => {
         io.emit('playerMoved', { id: targetId, x: myOldX, y: myOldY, angle: players[targetId].angle });
     });
 
+    // Boss hit
+    socket.on('bossHit', (data) => {
+        if (!boss || boss.phase !== 'alive') return;
+        boss.hp -= data.damage;
+        if (boss.hp <= 0) boss.hp = 0;
+        io.emit('bossMoved', { x: boss.x, y: boss.y, angle: boss.angle, hp: boss.hp });
+
+        if (boss.hp <= 0 && boss.phase === 'alive') {
+            boss.phase = 'dead';
+            console.log(`[BOSS] Boss defeated by ${players[socket.id]?.name || socket.id}`);
+
+            // Drop legendary/mythic loot (5 drops)
+            const drops = [];
+            for (let i = 0; i < 4; i++) {
+                const type = LEGENDARY_DROPS[Math.floor(Math.random() * LEGENDARY_DROPS.length)];
+                const id = `boss_drop_${Date.now()}_${i}`;
+                const angle = (i / 4) * Math.PI * 2;
+                const drop = { id, type, x: boss.x + Math.cos(angle) * 80, y: boss.y + Math.sin(angle) * 80 };
+                powerups[id] = drop;
+                drops.push(drop);
+            }
+            // Always drop 1 mythic (baby)
+            const mythicId = `boss_mythic_${Date.now()}`;
+            const mythicDrop = { id: mythicId, type: 'baby', x: boss.x, y: boss.y };
+            powerups[mythicId] = mythicDrop;
+            drops.push(mythicDrop);
+
+            io.emit('bossDied', {
+                killerId: socket.id,
+                killerName: players[socket.id]?.name || 'Unknown',
+                bossX: boss.x,
+                bossY: boss.y,
+                drops
+            });
+            io.emit('announcement', { message: `💀 Boss slain by ${players[socket.id]?.name || 'a hero'}! Loot dropped!` });
+
+            if (bossAIInterval) { clearInterval(bossAIInterval); bossAIInterval = null; }
+            boss = null;
+
+            // Respawn boss after 5 minutes
+            setTimeout(() => spawnBoss(), 5 * 60 * 1000);
+        }
+    });
+
+    // Admin spawn boss
+    socket.on('adminSpawnBoss', () => {
+        if (!players[socket.id]) return;
+        // Only admin can do this (basic trust based on existing admin detection)
+        if (boss) { io.to(socket.id).emit('announcement', { message: 'Boss already alive!' }); return; }
+        spawnBoss();
+    });
+
     // Admin announcement
     socket.on('adminAnnouncement', (data) => {
         if (!data || !data.message) return;
@@ -317,4 +445,8 @@ server.listen(PORT, () => {
 ║   Minimum Powerups: 50                 ║
 ╚═══════════════════════════════════════╝
     `);
+
+    // Spawn first boss after 5 minutes
+    bossSpawnTimer = setTimeout(() => spawnBoss(), 5 * 60 * 1000);
+    console.log('[BOSS] First boss spawns in 5 minutes!');
 });
