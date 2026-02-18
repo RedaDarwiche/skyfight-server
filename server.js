@@ -41,17 +41,23 @@ const BOSS_DROP_POWERS = [
     'blackhole', 'clone', 'baby', 'lightning', 'armageddon_drop'
 ];
 const LEGENDARY_DROPS = ['orbitallaser', 'frostnova', 'chaos', 'voidbeam', 'nuke', 'blackhole', 'clone', 'lightning'];
-const MYTHIC_DROPS = ['baby'];
+const MYTHIC_DROPS = ['baby', 'phoenix', 'soulsteal', 'timewarp'];
 
-// Boss state
-let boss = null;
+// Boss state — supports multiple simultaneous bosses
+const bosses = {};
 let bossSpawnTimer = null;
 
-function spawnBoss() {
-    boss = {
-        id: 'boss_' + Date.now(),
-        x: MAP_SIZE / 2 + (Math.random() - 0.5) * 1000,
-        y: MAP_SIZE / 2 + (Math.random() - 0.5) * 1000,
+function spawnBoss(label) {
+    const id = `boss_${Date.now()}_${label}`;
+    // Spawn the two bosses on opposite sides of the map
+    const side = label === 'A'
+        ? { x: 500 + Math.random() * 1000, y: 500 + Math.random() * 1000 }
+        : { x: MAP_SIZE - 1500 + Math.random() * 1000, y: MAP_SIZE - 1500 + Math.random() * 1000 };
+    bosses[id] = {
+        id,
+        label,
+        x: side.x,
+        y: side.y,
         hp: 1000,
         maxHp: 1000,
         angle: 0,
@@ -59,56 +65,56 @@ function spawnBoss() {
         phase: 'alive',
         attackTimer: 0
     };
-    console.log(`[BOSS] Boss spawned at (${Math.round(boss.x)}, ${Math.round(boss.y)})`);
-    io.emit('bossSpawn', boss);
-    io.emit('announcement', { message: '⚠️ A BOSS has spawned! Defeat it for legendary loot!' });
-    startBossAI();
+    console.log(`[BOSS ${label}] Spawned at (${Math.round(side.x)}, ${Math.round(side.y)})`);
+    io.emit('bossSpawn', bosses[id]);
+    io.emit('announcement', { message: `⚠️ BOSS ${label} has spawned! Defeat it for legendary loot!` });
 }
 
 let bossAIInterval = null;
 function startBossAI() {
-    if (bossAIInterval) clearInterval(bossAIInterval);
+    if (bossAIInterval) return; // already running
     bossAIInterval = setInterval(() => {
-        if (!boss || boss.phase !== 'alive') return;
+        for (const bossId in bosses) {
+            const b = bosses[bossId];
+            if (!b || b.phase !== 'alive') continue;
 
-        // Find nearest player
-        let nearest = null, nearestDist = Infinity;
-        for (const id in players) {
-            const p = players[id];
-            const d = Math.sqrt((boss.x - p.x) ** 2 + (boss.y - p.y) ** 2);
-            if (d < nearestDist) { nearestDist = d; nearest = { id, ...p }; }
-        }
-
-        if (nearest) {
-            // Move toward player
-            const dx = nearest.x - boss.x;
-            const dy = nearest.y - boss.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            boss.angle = Math.atan2(dy, dx);
-            if (dist > 80) {
-                boss.x += (dx / dist) * boss.speed * 15;
-                boss.y += (dy / dist) * boss.speed * 15;
-                boss.x = Math.max(100, Math.min(MAP_SIZE - 100, boss.x));
-                boss.y = Math.max(100, Math.min(MAP_SIZE - 100, boss.y));
+            // Find nearest player
+            let nearest = null, nearestDist = Infinity;
+            for (const id in players) {
+                const p = players[id];
+                const d = Math.sqrt((b.x - p.x) ** 2 + (b.y - p.y) ** 2);
+                if (d < nearestDist) { nearestDist = d; nearest = { id, ...p }; }
             }
 
-            // Attack nearby players
-            boss.attackTimer++;
-            if (boss.attackTimer >= 3) {
-                boss.attackTimer = 0;
-                for (const id in players) {
-                    const p = players[id];
-                    const d = Math.sqrt((boss.x - p.x) ** 2 + (boss.y - p.y) ** 2);
-                    if (d < 120) {
-                        if (players[id]) players[id].hp = Math.max(0, (players[id].hp || 100) - 15);
-                        io.to(id).emit('playerHit', { targetId: id, damage: 15, attackerId: 'boss' });
+            if (nearest) {
+                const dx = nearest.x - b.x;
+                const dy = nearest.y - b.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                b.angle = Math.atan2(dy, dx);
+                if (dist > 80) {
+                    b.x += (dx / dist) * b.speed * 15;
+                    b.y += (dy / dist) * b.speed * 15;
+                    b.x = Math.max(100, Math.min(MAP_SIZE - 100, b.x));
+                    b.y = Math.max(100, Math.min(MAP_SIZE - 100, b.y));
+                }
+
+                b.attackTimer++;
+                if (b.attackTimer >= 3) {
+                    b.attackTimer = 0;
+                    for (const id in players) {
+                        const p = players[id];
+                        if ((p.hp || 0) <= 0) continue; // skip dead players
+                        const d = Math.sqrt((b.x - p.x) ** 2 + (b.y - p.y) ** 2);
+                        if (d < 120) {
+                            players[id].hp = Math.max(0, (players[id].hp || 100) - 15);
+                            io.to(id).emit('playerHit', { targetId: id, damage: 15, attackerId: 'boss' });
+                        }
                     }
                 }
+                io.emit('bossMoved', { bossId, x: b.x, y: b.y, angle: b.angle, hp: b.hp });
             }
-
-            io.emit('bossMoved', { x: boss.x, y: boss.y, angle: boss.angle, hp: boss.hp });
         }
-    }, 200); // 5 updates/sec
+    }, 200);
 }
 
 // Spawn powerup
@@ -216,12 +222,19 @@ io.on('connection', (socket) => {
             player: players[socket.id],
             players: players,
             powerups: powerups,
-            projectiles: {}
+            projectiles: {},
+            bosses: bosses
         });
 
         // Send join success
         socket.emit('joinSuccess');
         console.log(`[SUCCESS] joinSuccess sent to ${socket.id}`);
+
+        // Owner join announcement
+        const ADMIN_EMAIL_NAME = 'Astraphobia';
+        if (playerName === ADMIN_EMAIL_NAME) {
+            io.emit('announcement', { message: '👑 The Owner Astraphobia Has Joined!' });
+        }
 
         // Notify others
         socket.broadcast.emit('playerJoined', players[socket.id]);
@@ -308,56 +321,61 @@ io.on('connection', (socket) => {
         io.emit('playerMoved', { id: targetId, x: myOldX, y: myOldY, angle: players[targetId].angle });
     });
 
-    // Boss hit
+    // Boss hit — client must send bossId
     socket.on('bossHit', (data) => {
-        if (!boss || boss.phase !== 'alive') return;
-        boss.hp -= data.damage;
-        if (boss.hp <= 0) boss.hp = 0;
-        io.emit('bossMoved', { x: boss.x, y: boss.y, angle: boss.angle, hp: boss.hp });
+        const b = bosses[data.bossId];
+        if (!b || b.phase !== 'alive') return;
+        b.hp -= data.damage;
+        if (b.hp <= 0) b.hp = 0;
+        io.emit('bossMoved', { bossId: b.id, x: b.x, y: b.y, angle: b.angle, hp: b.hp });
 
-        if (boss.hp <= 0 && boss.phase === 'alive') {
-            boss.phase = 'dead';
-            console.log(`[BOSS] Boss defeated by ${players[socket.id]?.name || socket.id}`);
+        if (b.hp <= 0 && b.phase === 'alive') {
+            b.phase = 'dead';
+            const killerName = players[socket.id]?.name || 'Unknown';
+            console.log(`[BOSS ${b.label}] Defeated by ${killerName}`);
 
-            // Drop legendary/mythic loot (5 drops)
+            // 4 legendary drops + 1 mythic drop (from extended mythic list)
             const drops = [];
             for (let i = 0; i < 4; i++) {
                 const type = LEGENDARY_DROPS[Math.floor(Math.random() * LEGENDARY_DROPS.length)];
                 const id = `boss_drop_${Date.now()}_${i}`;
                 const angle = (i / 4) * Math.PI * 2;
-                const drop = { id, type, x: boss.x + Math.cos(angle) * 80, y: boss.y + Math.sin(angle) * 80 };
+                const drop = { id, type, x: b.x + Math.cos(angle) * 80, y: b.y + Math.sin(angle) * 80 };
                 powerups[id] = drop;
                 drops.push(drop);
             }
-            // Always drop 1 mythic (baby)
+            // Mythic drop — random from all 4 mythics
+            const mythicType = MYTHIC_DROPS[Math.floor(Math.random() * MYTHIC_DROPS.length)];
             const mythicId = `boss_mythic_${Date.now()}`;
-            const mythicDrop = { id: mythicId, type: 'baby', x: boss.x, y: boss.y };
+            const mythicDrop = { id: mythicId, type: mythicType, x: b.x, y: b.y };
             powerups[mythicId] = mythicDrop;
             drops.push(mythicDrop);
 
             io.emit('bossDied', {
+                bossId: b.id,
                 killerId: socket.id,
-                killerName: players[socket.id]?.name || 'Unknown',
-                bossX: boss.x,
-                bossY: boss.y,
+                killerName,
+                bossX: b.x,
+                bossY: b.y,
                 drops
             });
-            io.emit('announcement', { message: `💀 Boss slain by ${players[socket.id]?.name || 'a hero'}! Loot dropped!` });
+            io.emit('announcement', { message: `💀 Boss ${b.label} slain by ${killerName}! Legendary loot dropped!` });
 
-            if (bossAIInterval) { clearInterval(bossAIInterval); bossAIInterval = null; }
-            boss = null;
+            delete bosses[b.id];
 
-            // Respawn boss after 5 minutes
-            setTimeout(() => spawnBoss(), 5 * 60 * 1000);
+            // Respawn this boss slot after 5 minutes
+            setTimeout(() => { spawnBoss(b.label); startBossAI(); }, 5 * 60 * 1000);
         }
     });
 
     // Admin spawn boss
     socket.on('adminSpawnBoss', () => {
         if (!players[socket.id]) return;
-        // Only admin can do this (basic trust based on existing admin detection)
-        if (boss) { io.to(socket.id).emit('announcement', { message: 'Boss already alive!' }); return; }
-        spawnBoss();
+        const count = Object.keys(bosses).length;
+        if (count >= 2) { io.to(socket.id).emit('announcement', { message: 'Both bosses are already alive!' }); return; }
+        const label = Object.values(bosses).some(b => b.label === 'A') ? 'B' : 'A';
+        spawnBoss(label);
+        startBossAI();
     });
 
     // Admin announcement
@@ -446,7 +464,11 @@ server.listen(PORT, () => {
 ╚═══════════════════════════════════════╝
     `);
 
-    // Spawn first boss after 5 minutes
-    bossSpawnTimer = setTimeout(() => spawnBoss(), 5 * 60 * 1000);
-    console.log('[BOSS] First boss spawns in 5 minutes!');
+    // Spawn 2 bosses after 5 minutes
+    bossSpawnTimer = setTimeout(() => {
+        spawnBoss('A');
+        spawnBoss('B');
+        startBossAI();
+    }, 5 * 60 * 1000);
+    console.log('[BOSS] 2 Bosses spawn in 5 minutes!');
 });
