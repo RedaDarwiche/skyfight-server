@@ -35,11 +35,6 @@ const POWER_TYPES = [
     // NOTE: 'baby' intentionally excluded - spawned via admin/special only
 ];
 
-// Legendary/Mythic powers that boss can drop
-const BOSS_DROP_POWERS = [
-    'orbitallaser', 'frostnova', 'chaos', 'voidbeam', 'nuke',
-    'blackhole', 'clone', 'baby', 'lightning', 'armageddon_drop'
-];
 const LEGENDARY_DROPS = ['orbitallaser', 'frostnova', 'chaos', 'voidbeam', 'nuke', 'blackhole', 'clone', 'lightning'];
 const MYTHIC_DROPS = ['baby', 'phoenix', 'soulsteal'];
 
@@ -229,12 +224,6 @@ io.on('connection', (socket) => {
         socket.emit('joinSuccess');
         console.log(`[SUCCESS] joinSuccess sent to ${socket.id}`);
 
-        // Owner join announcement
-        const ADMIN_EMAIL_NAME = 'Astraphobia';
-        if (playerName === ADMIN_EMAIL_NAME) {
-            io.emit('announcement', { message: '👑 The Owner Astraphobia Has Joined!' });
-        }
-
         // Notify others
         socket.broadcast.emit('playerJoined', players[socket.id]);
         console.log(`[PLAYERS] Total online: ${Object.keys(players).length}`);
@@ -242,10 +231,13 @@ io.on('connection', (socket) => {
 
     // Movement
     socket.on('move', (data) => {
-        if (players[socket.id]) {
-            Object.assign(players[socket.id], data);
-            socket.broadcast.emit('playerMoved', { id: socket.id, ...data });
+        if (!players[socket.id] || !data) return;
+        // Whitelist only safe fields - never allow overwriting id/userId/name/etc.
+        const allowed = ['x','y','angle','kills','currentPower','hp','speedActive','berserkerActive','phaseActive','mirrorActive','isOwner'];
+        for (const key of allowed) {
+            if (data[key] !== undefined) players[socket.id][key] = data[key];
         }
+        socket.broadcast.emit('playerMoved', { id: socket.id, ...data });
     });
 
     // Shooting
@@ -263,14 +255,15 @@ io.on('connection', (socket) => {
 
     // Hits
     socket.on('playerHit', (data) => {
+        if (!data || !data.targetId || typeof data.damage !== 'number') return;
         if (players[data.targetId]) {
-            players[data.targetId].hp -= data.damage;
-            if (players[data.targetId].hp < 0) players[data.targetId].hp = 0;
+            players[data.targetId].hp = Math.min(100, Math.max(0, (players[data.targetId].hp || 100) - data.damage));
         }
-        if (data.targetId && io.sockets.sockets.get(data.targetId)) {
-            io.to(data.targetId).emit('playerHit', data);
-        }
-        socket.broadcast.emit('playerHit', data);
+        // Send directly to target only once, then broadcast to others for visual effects
+        const targetSock = io.sockets.sockets.get(data.targetId);
+        if (targetSock) io.to(data.targetId).emit('playerHit', data);
+        // Skip target in broadcast to prevent double-hit
+        socket.broadcast.except(data.targetId).emit('playerHit', data);
     });
 
     // Death
@@ -302,8 +295,12 @@ io.on('connection', (socket) => {
     });
 
     socket.on('dropPower', (data) => {
+        if (!data || !data.type || !POWER_TYPES.includes(data.type)) return;
+        if (typeof data.x !== 'number' || typeof data.y !== 'number') return;
+        const safeX = Math.max(50, Math.min(MAP_SIZE - 50, data.x));
+        const safeY = Math.max(50, Math.min(MAP_SIZE - 50, data.y));
         const id = `drop_${Date.now()}_${socket.id}`;
-        powerups[id] = { id, type: data.type, x: data.x, y: data.y };
+        powerups[id] = { id, type: data.type, x: safeX, y: safeY };
         io.emit('powerupSpawn', powerups[id]);
     });
 
@@ -324,6 +321,7 @@ io.on('connection', (socket) => {
     socket.on('bossHit', (data) => {
         const b = bosses[data.bossId];
         if (!b || b.phase !== 'alive') return;
+        if (typeof data.damage !== 'number' || data.damage <= 0) return; // reject invalid/negative damage
         b.hp -= data.damage;
         if (b.hp <= 0) b.hp = 0;
         io.emit('bossMoved', { bossId: b.id, x: b.x, y: b.y, angle: b.angle, hp: b.hp });
