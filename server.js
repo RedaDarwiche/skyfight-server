@@ -46,11 +46,11 @@ const MYTHIC_DROPS = ['baby', 'phoenix', 'soulsteal'];
 
 // ── NPC System ──────────────────────────────────────────────────
 const NPC_CONFIGS = {
-    common:    { maxHp: 60,   speed: 1.4, attackDmg: 3,  attackRange: 90, radius: 18, color: '#9ca3af', respawnMs: 1000,   dropCount: 2 },
-    rare:      { maxHp: 150,  speed: 1.8, attackDmg: 5,  attackRange: 90, radius: 20, color: '#3b82f6', respawnMs: 2000,   dropCount: 2 },
-    epic:      { maxHp: 320,  speed: 2.1, attackDmg: 8,  attackRange: 90, radius: 23, color: '#a855f7', respawnMs: 3000,   dropCount: 2 },
-    legendary: { maxHp: 750,  speed: 0.9, attackDmg: 12, attackRange: 90, radius: 27, color: '#f59e0b', respawnMs: 4000,   dropCount: 2 },
-    mythic:    { maxHp: 1500, speed: 0.35, attackDmg: 18, attackRange: 90, radius: 32, color: '#ff00cc', respawnMs: 300000, dropCount: 2 }
+    common:    { maxHp: 60,   speed: 1.4, attackDmg: 5,  attackRange: 100, radius: 18, color: '#9ca3af', respawnMs: 1000,   dropCount: 2 },
+    rare:      { maxHp: 150,  speed: 1.8, attackDmg: 10, attackRange: 110, radius: 20, color: '#3b82f6', respawnMs: 2000,   dropCount: 2 },
+    epic:      { maxHp: 320,  speed: 2.1, attackDmg: 18, attackRange: 120, radius: 23, color: '#a855f7', respawnMs: 3000,   dropCount: 2 },
+    legendary: { maxHp: 750,  speed: 0.9, attackDmg: 28, attackRange: 130, radius: 27, color: '#f59e0b', respawnMs: 4000,   dropCount: 2 },
+    mythic:    { maxHp: 1500, speed: 0.35, attackDmg: 35, attackRange: 380, radius: 32, color: '#ff00cc', respawnMs: 300000, dropCount: 2 }
 };
 
 const RARITY_POWER_POOL = {
@@ -135,24 +135,7 @@ function startNPCAI() {
                 }
 
                 if (!target) {
-                    // Roam: pick a new random waypoint occasionally and drift toward it
-                    if (!npc.roamTarget || Math.random() < 0.008) {
-                        npc.roamTarget = {
-                            x: Math.random() * (MAP_SIZE - 600) + 300,
-                            y: Math.random() * (MAP_SIZE - 600) + 300
-                        };
-                    }
-                    const rx = npc.roamTarget.x - npc.x;
-                    const ry = npc.roamTarget.y - npc.y;
-                    const rd = Math.sqrt(rx * rx + ry * ry);
-                    if (rd > 40) {
-                        const roamSpeed = npc.speed * 0.4; // roam at 40% of chase speed
-                        npc.angle = Math.atan2(ry, rx);
-                        npc.x += (rx / rd) * roamSpeed * 15;
-                        npc.y += (ry / rd) * roamSpeed * 15;
-                        npc.x = Math.max(100, Math.min(MAP_SIZE - 100, npc.x));
-                        npc.y = Math.max(100, Math.min(MAP_SIZE - 100, npc.y));
-                    }
+                    // No aggro target — just idle, broadcast position
                     io.emit('npcMoved', { npcId: npc.id, x: npc.x, y: npc.y, angle: npc.angle, hp: npc.hp });
                     continue;
                 }
@@ -266,15 +249,16 @@ function startBossAI() {
                     b.y = Math.max(100, Math.min(MAP_SIZE - 100, b.y));
                 }
                 b.attackTimer++;
-                if (b.attackTimer >= 4) {
+                if (b.attackTimer >= 3) {
                     b.attackTimer = 0;
                     for (const id in players) {
                         const p = players[id];
                         if (!p) continue;
                         const d = Math.sqrt((b.x - p.x) ** 2 + (b.y - p.y) ** 2);
-                        if (d < 90) {
-                            players[id].hp = Math.max(0, (players[id].hp || 100) - 8);
-                            io.emit('playerHit', { targetId: id, damage: 8, attackerId: 'boss' });
+                        if (d < 180) {
+                            players[id].hp = Math.max(0, (players[id].hp || 100) - 15);
+                            // Broadcast to all — client filters by targetId, guarantees delivery
+                            io.emit('playerHit', { targetId: id, damage: 15, attackerId: 'boss' });
                         }
                     }
                 }
@@ -295,7 +279,7 @@ function spawnPowerup() {
 }
 
 console.log('Spawning initial powerups...');
-for (let i = 0; i < 40; i++) {
+for (let i = 0; i < 80; i++) {
     const id = `pu_${powerupId++}`;
     const type = POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)];
     powerups[id] = { id, x: Math.random() * (MAP_SIZE - 100) + 50, y: Math.random() * (MAP_SIZE - 100) + 50, type };
@@ -367,7 +351,8 @@ io.on('connection', (socket) => {
             p.phaseActive = !!data.phaseActive;
             p.mirrorActive = !!data.mirrorActive;
             p.isOwner = !!data.isOwner;
-            socket.broadcast.emit('playerMoved', { id: socket.id, x: p.x, y: p.y, angle: p.angle, currentPower: p.currentPower, hp: p.hp, kills: p.kills, speedActive: p.speedActive, berserkerActive: p.berserkerActive, phaseActive: p.phaseActive, mirrorActive: p.mirrorActive, isOwner: p.isOwner });
+            p.sprinting = !!data.sprinting;
+            socket.broadcast.emit('playerMoved', { id: socket.id, x: p.x, y: p.y, angle: p.angle, currentPower: p.currentPower, hp: p.hp, kills: p.kills, speedActive: p.speedActive, berserkerActive: p.berserkerActive, phaseActive: p.phaseActive, mirrorActive: p.mirrorActive, isOwner: p.isOwner, sprinting: p.sprinting });
         } catch (e) { console.error('[MOVE ERROR]', e.message); }
     });
 
@@ -405,6 +390,8 @@ io.on('connection', (socket) => {
             }
             if (data.killerId && players[data.killerId]) {
                 players[data.killerId].kills = (players[data.killerId].kills || 0) + 1;
+                // Broadcast killer's new kill count so all leaderboards update immediately
+                io.emit('killsUpdate', { playerId: data.killerId, kills: players[data.killerId].kills });
             }
             io.emit('playerDied', data);
         } catch (e) { console.error('[PLAYERDIED ERROR]', e.message); }
@@ -547,7 +534,7 @@ setInterval(() => {
 
 setInterval(() => {
     try {
-        const minPowerups = 25, currentCount = Object.keys(powerups).length;
+        const minPowerups = 50, currentCount = Object.keys(powerups).length;
         if (currentCount < minPowerups) {
             const toSpawn = minPowerups - currentCount;
             for (let i = 0; i < toSpawn; i++) spawnPowerup();
