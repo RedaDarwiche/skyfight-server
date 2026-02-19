@@ -15,7 +15,7 @@ const io = socketIo(server, {
 });
 
 const PORT = process.env.PORT || 3000;
-const MAP_SIZE = 4000;
+const MAP_SIZE = 2000;
 
 // State
 const players = {};
