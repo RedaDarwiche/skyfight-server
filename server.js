@@ -46,11 +46,11 @@ const MYTHIC_DROPS = ['baby', 'phoenix', 'soulsteal'];
 
 // ── NPC System ──────────────────────────────────────────────────
 const NPC_CONFIGS = {
-    common:    { maxHp: 60,   speed: 1.4, attackDmg: 5,  attackRange: 100, radius: 18, color: '#9ca3af', respawnMs: 1000,   dropCount: 2 },
-    rare:      { maxHp: 150,  speed: 1.8, attackDmg: 10, attackRange: 110, radius: 20, color: '#3b82f6', respawnMs: 2000,   dropCount: 2 },
-    epic:      { maxHp: 320,  speed: 2.1, attackDmg: 18, attackRange: 120, radius: 23, color: '#a855f7', respawnMs: 3000,   dropCount: 2 },
-    legendary: { maxHp: 750,  speed: 0.9, attackDmg: 28, attackRange: 130, radius: 27, color: '#f59e0b', respawnMs: 4000,   dropCount: 2 },
-    mythic:    { maxHp: 1500, speed: 0.35, attackDmg: 35, attackRange: 380, radius: 32, color: '#ff00cc', respawnMs: 300000, dropCount: 2 }
+    common:    { maxHp: 60,   speed: 1.4, attackDmg: 3,  attackRange: 90, radius: 18, color: '#9ca3af', respawnMs: 1000,   dropCount: 2 },
+    rare:      { maxHp: 150,  speed: 1.8, attackDmg: 5,  attackRange: 90, radius: 20, color: '#3b82f6', respawnMs: 2000,   dropCount: 2 },
+    epic:      { maxHp: 320,  speed: 2.1, attackDmg: 8,  attackRange: 90, radius: 23, color: '#a855f7', respawnMs: 3000,   dropCount: 2 },
+    legendary: { maxHp: 750,  speed: 0.9, attackDmg: 12, attackRange: 90, radius: 27, color: '#f59e0b', respawnMs: 4000,   dropCount: 2 },
+    mythic:    { maxHp: 1500, speed: 0.35, attackDmg: 18, attackRange: 90, radius: 32, color: '#ff00cc', respawnMs: 300000, dropCount: 2 }
 };
 
 const RARITY_POWER_POOL = {
