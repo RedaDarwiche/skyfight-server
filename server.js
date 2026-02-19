@@ -26,13 +26,14 @@ let powerupId = 0;
 // ✅ ENHANCED: Added 5 new powers + maintained all existing powers
 const POWER_TYPES = [
     'dash', 'teleport', 'clone', 'blackhole', 'nuke', 'heal', 'emp', 
-    'swap', 'shockwave', 'speed', 'phase', 'berserker', 'shield', 
+    'swap', 'shockwave', 'phase', 'berserker', 'shield', 
     'vampire', 'rage', 'tank', 'magnet', 'thorns', 'regeneration', 
     'tripleshot', 'laser', 'rocket', 'scatter', 'sniper', 'minigun', 
     'explosive', 'freeze', 'poison', 'lightning',
     'timebomb', 'orbitallaser', 'shadowclone', 'frostnova',
     'soulrip', 'voidbeam', 'gravitypull', 'mirror', 'chaos'
     // NOTE: 'baby' intentionally excluded - spawned via admin/special only
+    // NOTE: 'speed' removed - replaced by sprint mechanic
 ];
 
 const LEGENDARY_DROPS = ['orbitallaser', 'frostnova', 'chaos', 'voidbeam', 'nuke', 'blackhole', 'clone', 'lightning'];
@@ -76,6 +77,7 @@ function startBossAI() {
             let nearest = null, nearestDist = Infinity;
             for (const id in players) {
                 const p = players[id];
+                if ((p.hp || 0) <= 0) continue; // skip dead players
                 const d = Math.sqrt((b.x - p.x) ** 2 + (b.y - p.y) ** 2);
                 if (d < nearestDist) { nearestDist = d; nearest = { id, ...p }; }
             }
@@ -105,8 +107,10 @@ function startBossAI() {
                         }
                     }
                 }
-                io.emit('bossMoved', { bossId, x: b.x, y: b.y, angle: b.angle, hp: b.hp });
             }
+
+            // Always emit bossMoved so clients stay in sync (even when idle)
+            io.emit('bossMoved', { bossId, x: b.x, y: b.y, angle: b.angle, hp: b.hp, maxHp: b.maxHp });
         }
     }, 200);
 }
