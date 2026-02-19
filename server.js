@@ -46,11 +46,11 @@ const MYTHIC_DROPS = ['baby', 'phoenix', 'soulsteal'];
 
 // ── NPC System ──────────────────────────────────────────────────
 const NPC_CONFIGS = {
-    common:    { maxHp: 60,   speed: 1.4, attackDmg: 5,  attackRange: 100, radius: 18, color: '#9ca3af', respawnMs: 1000,   dropCount: 2 },
-    rare:      { maxHp: 150,  speed: 1.8, attackDmg: 10, attackRange: 110, radius: 20, color: '#3b82f6', respawnMs: 2000,   dropCount: 2 },
-    epic:      { maxHp: 320,  speed: 2.1, attackDmg: 18, attackRange: 120, radius: 23, color: '#a855f7', respawnMs: 3000,   dropCount: 2 },
-    legendary: { maxHp: 750,  speed: 2.8, attackDmg: 28, attackRange: 130, radius: 27, color: '#f59e0b', respawnMs: 4000,   dropCount: 2 },
-    mythic:    { maxHp: 1500, speed: 0.9, attackDmg: 35, attackRange: 380, radius: 32, color: '#ff00cc', respawnMs: 300000, dropCount: 2 }
+    common:    { maxHp: 60,   speed: 1.4, attackDmg: 5,  attackRange: 100, radius: 18, color: '#9ca3af', respawnMs: 1 * 60 * 1000, dropCount: 2 },
+    rare:      { maxHp: 150,  speed: 1.8, attackDmg: 10, attackRange: 110, radius: 20, color: '#3b82f6', respawnMs: 2 * 60 * 1000, dropCount: 2 },
+    epic:      { maxHp: 320,  speed: 2.1, attackDmg: 18, attackRange: 120, radius: 23, color: '#a855f7', respawnMs: 3 * 60 * 1000, dropCount: 2 },
+    legendary: { maxHp: 750,  speed: 2.8, attackDmg: 28, attackRange: 130, radius: 27, color: '#f59e0b', respawnMs: 4 * 60 * 1000, dropCount: 2 },
+    mythic:    { maxHp: 1500, speed: 0.9, attackDmg: 35, attackRange: 380, radius: 32, color: '#ff00cc', respawnMs: 5 * 60 * 1000, dropCount: 2 }
 };
 
 const RARITY_POWER_POOL = {
@@ -124,23 +124,17 @@ function startNPCAI() {
                 const npc = npcs[npcId];
                 if (!npc || npc.phase !== 'alive') continue;
 
+                // Find nearest player who is NOT spawn-protected
                 let nearest = null, nearestDist = Infinity;
                 for (const pid in players) {
                     const p = players[pid];
                     if (!p || (p.hp || 0) <= 0) continue;
-                    // Skip players with spawn protection (3 seconds after spawn)
                     if (p.spawnedAt && (Date.now() - p.spawnedAt) < 3000) continue;
                     const d = Math.sqrt((npc.x - p.x) ** 2 + (npc.y - p.y) ** 2);
                     if (d < nearestDist) { nearestDist = d; nearest = { id: pid, ...p }; }
                 }
-                if (!nearest) continue;
 
-                const dx = nearest.x - npc.x;
-                const dy = nearest.y - npc.y;
-                const dist = nearestDist;
-                if (dist === 0) continue;
-
-                // NPC separation: push away from other NPCs so they don't clump
+                // NPC separation: spread out so they don't all clump
                 let sepX = 0, sepY = 0;
                 for (const otherId in npcs) {
                     if (otherId === npcId) continue;
@@ -150,8 +144,23 @@ function startNPCAI() {
                     const sd = Math.sqrt(sx * sx + sy * sy);
                     if (sd < 60 && sd > 0) { sepX += (sx / sd) * (60 - sd); sepY += (sy / sd) * (60 - sd); }
                 }
-                npc.x += sepX * 0.15;
-                npc.y += sepY * 0.15;
+                npc.x = Math.max(100, Math.min(MAP_SIZE - 100, npc.x + sepX * 0.15));
+                npc.y = Math.max(100, Math.min(MAP_SIZE - 100, npc.y + sepY * 0.15));
+
+                // No valid target — wander randomly so they don't freeze
+                if (!nearest) {
+                    if (!npc.wanderAngle || Math.random() < 0.05) npc.wanderAngle = Math.random() * Math.PI * 2;
+                    npc.x = Math.max(100, Math.min(MAP_SIZE - 100, npc.x + Math.cos(npc.wanderAngle) * npc.speed * 8));
+                    npc.y = Math.max(100, Math.min(MAP_SIZE - 100, npc.y + Math.sin(npc.wanderAngle) * npc.speed * 8));
+                    npc.angle = npc.wanderAngle;
+                    io.emit('npcMoved', { npcId: npc.id, x: npc.x, y: npc.y, angle: npc.angle, hp: npc.hp });
+                    continue;
+                }
+
+                const dx = nearest.x - npc.x;
+                const dy = nearest.y - npc.y;
+                const dist = nearestDist;
+                if (dist === 0) continue;
 
                 if (npc.rarity === 'mythic') {
                     npc.angle = Math.atan2(-dy, -dx);
@@ -167,6 +176,7 @@ function startNPCAI() {
                         for (const pid in players) {
                             const p = players[pid];
                             if (!p || (p.hp || 0) <= 0) continue;
+                            if (p.spawnedAt && (Date.now() - p.spawnedAt) < 3000) continue;
                             const d = Math.sqrt((npc.x - p.x) ** 2 + (npc.y - p.y) ** 2);
                             if (d < npc.attackRange) {
                                 players[pid].hp = Math.max(0, (players[pid].hp || 100) - npc.attackDmg);
@@ -189,6 +199,7 @@ function startNPCAI() {
                         for (const pid in players) {
                             const p = players[pid];
                             if (!p || (p.hp || 0) <= 0) continue;
+                            if (p.spawnedAt && (Date.now() - p.spawnedAt) < 3000) continue;
                             const d = Math.sqrt((npc.x - p.x) ** 2 + (npc.y - p.y) ** 2);
                             if (d < npc.attackRange) {
                                 players[pid].hp = Math.max(0, (players[pid].hp || 100) - npc.attackDmg);
@@ -251,6 +262,7 @@ function startBossAI() {
                     for (const id in players) {
                         const p = players[id];
                         if (!p || (p.hp || 0) <= 0) continue;
+                        if (p.spawnedAt && (Date.now() - p.spawnedAt) < 3000) continue;
                         const d = Math.sqrt((b.x - p.x) ** 2 + (b.y - p.y) ** 2);
                         if (d < 120) {
                             players[id].hp = Math.max(0, (players[id].hp || 100) - 15);
@@ -480,6 +492,28 @@ io.on('connection', (socket) => {
             spawnBoss(label); startBossAI();
             io.emit('announcement', { message: '⚠️ Bosses that drop Mythic/Legendary powers have spawned!' });
         } catch (e) { console.error('[ADMINSPAWNBOSS ERROR]', e.message); }
+    });
+
+    socket.on('adminSpawnBossA', () => {
+        try {
+            if (!players[socket.id]) return;
+            if (Object.values(bosses).some(b => b.label === 'A')) {
+                io.to(socket.id).emit('announcement', { message: '💀 Boss A is already alive!' }); return;
+            }
+            spawnBoss('A'); startBossAI();
+            io.emit('announcement', { message: '⚠️ 💀 Boss A has been unleashed!' });
+        } catch (e) { console.error('[ADMINSPAWNBOSSA ERROR]', e.message); }
+    });
+
+    socket.on('adminSpawnBossB', () => {
+        try {
+            if (!players[socket.id]) return;
+            if (Object.values(bosses).some(b => b.label === 'B')) {
+                io.to(socket.id).emit('announcement', { message: '💀 Boss B is already alive!' }); return;
+            }
+            spawnBoss('B'); startBossAI();
+            io.emit('announcement', { message: '⚠️ 💀 Boss B has been unleashed!' });
+        } catch (e) { console.error('[ADMINSPAWNBOSSB ERROR]', e.message); }
     });
 
     socket.on('adminAnnouncement', (data) => {
