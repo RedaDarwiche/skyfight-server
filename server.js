@@ -283,17 +283,23 @@ io.on('connection', (socket) => {
             if (!data || !data.name) { socket.emit('joinError', { message: 'Invalid join data' }); return; }
             if (data.userId && activeSessions[data.userId]) {
                 const existingSocketId = activeSessions[data.userId];
-                const existingSocket = io.sockets.sockets.get(existingSocketId);
-                if (existingSocket && existingSocket.connected) {
-                    socket.emit('duplicateSession', { message: 'This account is already playing in another session!' });
-                    return;
-                } else {
+                // Don't block reconnects — if same userId joins with a NEW socket,
+                // kick the old session rather than rejecting the new one.
+                if (existingSocketId !== socket.id) {
+                    const existingSocket = io.sockets.sockets.get(existingSocketId);
+                    if (existingSocket && existingSocket.connected) {
+                        existingSocket.emit('forceDisconnect', { message: 'Joined from another device or tab.' });
+                        existingSocket.disconnect(true);
+                    }
+                    if (players[existingSocketId]) {
+                        io.emit('playerLeft', existingSocketId);
+                        delete players[existingSocketId];
+                    }
                     delete activeSessions[data.userId];
-                    if (players[existingSocketId]) delete players[existingSocketId];
                 }
             }
             if (data.userId) activeSessions[data.userId] = socket.id;
-            const playerName = String(data.name).substring(0, 15).trim() || 'Guest';
+            const playerName = (String(data.name || '').substring(0, 15).trim()) || 'Guest';
             players[socket.id] = {
                 id: socket.id, userId: data.userId || null, name: playerName,
                 x: Math.random() * (MAP_SIZE - 200) + 100, y: Math.random() * (MAP_SIZE - 200) + 100,
