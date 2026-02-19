@@ -135,7 +135,24 @@ function startNPCAI() {
                 }
 
                 if (!target) {
-                    // No aggro target — just idle, broadcast position
+                    // Roam: pick a new random waypoint occasionally and drift toward it
+                    if (!npc.roamTarget || Math.random() < 0.008) {
+                        npc.roamTarget = {
+                            x: Math.random() * (MAP_SIZE - 600) + 300,
+                            y: Math.random() * (MAP_SIZE - 600) + 300
+                        };
+                    }
+                    const rx = npc.roamTarget.x - npc.x;
+                    const ry = npc.roamTarget.y - npc.y;
+                    const rd = Math.sqrt(rx * rx + ry * ry);
+                    if (rd > 40) {
+                        const roamSpeed = npc.speed * 0.4; // roam at 40% of chase speed
+                        npc.angle = Math.atan2(ry, rx);
+                        npc.x += (rx / rd) * roamSpeed * 15;
+                        npc.y += (ry / rd) * roamSpeed * 15;
+                        npc.x = Math.max(100, Math.min(MAP_SIZE - 100, npc.x));
+                        npc.y = Math.max(100, Math.min(MAP_SIZE - 100, npc.y));
+                    }
                     io.emit('npcMoved', { npcId: npc.id, x: npc.x, y: npc.y, angle: npc.angle, hp: npc.hp });
                     continue;
                 }
@@ -249,16 +266,15 @@ function startBossAI() {
                     b.y = Math.max(100, Math.min(MAP_SIZE - 100, b.y));
                 }
                 b.attackTimer++;
-                if (b.attackTimer >= 3) {
+                if (b.attackTimer >= 4) {
                     b.attackTimer = 0;
                     for (const id in players) {
                         const p = players[id];
                         if (!p) continue;
                         const d = Math.sqrt((b.x - p.x) ** 2 + (b.y - p.y) ** 2);
-                        if (d < 180) {
-                            players[id].hp = Math.max(0, (players[id].hp || 100) - 15);
-                            // Broadcast to all — client filters by targetId, guarantees delivery
-                            io.emit('playerHit', { targetId: id, damage: 15, attackerId: 'boss' });
+                        if (d < 90) {
+                            players[id].hp = Math.max(0, (players[id].hp || 100) - 8);
+                            io.emit('playerHit', { targetId: id, damage: 8, attackerId: 'boss' });
                         }
                     }
                 }
@@ -279,7 +295,7 @@ function spawnPowerup() {
 }
 
 console.log('Spawning initial powerups...');
-for (let i = 0; i < 80; i++) {
+for (let i = 0; i < 40; i++) {
     const id = `pu_${powerupId++}`;
     const type = POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)];
     powerups[id] = { id, x: Math.random() * (MAP_SIZE - 100) + 50, y: Math.random() * (MAP_SIZE - 100) + 50, type };
@@ -531,7 +547,7 @@ setInterval(() => {
 
 setInterval(() => {
     try {
-        const minPowerups = 50, currentCount = Object.keys(powerups).length;
+        const minPowerups = 25, currentCount = Object.keys(powerups).length;
         if (currentCount < minPowerups) {
             const toSpawn = minPowerups - currentCount;
             for (let i = 0; i < toSpawn; i++) spawnPowerup();
