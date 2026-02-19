@@ -352,6 +352,9 @@ io.on('connection', (socket) => {
             p.mirrorActive = !!data.mirrorActive;
             p.isOwner = !!data.isOwner;
             p.sprinting = !!data.sprinting;
+            // Accept HP and kills from client (player-to-player damage is client-authoritative)
+            if (typeof data.hp === 'number' && data.hp >= 0 && data.hp <= 100) p.hp = data.hp;
+            if (typeof data.kills === 'number' && data.kills >= 0) p.kills = data.kills;
             socket.broadcast.emit('playerMoved', { id: socket.id, x: p.x, y: p.y, angle: p.angle, currentPower: p.currentPower, hp: p.hp, kills: p.kills, speedActive: p.speedActive, berserkerActive: p.berserkerActive, phaseActive: p.phaseActive, mirrorActive: p.mirrorActive, isOwner: p.isOwner, sprinting: p.sprinting });
         } catch (e) { console.error('[MOVE ERROR]', e.message); }
     });
@@ -374,6 +377,16 @@ io.on('connection', (socket) => {
             if (targetSock) io.to(data.targetId).emit('playerHit', data);
             socket.broadcast.emit('playerHit', data);
         } catch (e) { console.error('[PLAYERHIT ERROR]', e.message); }
+    });
+
+    // Fast HP sync — victim calls this after taking damage so all clients update health bar immediately
+    socket.on('hpSync', (data) => {
+        try {
+            if (!data || !players[socket.id]) return;
+            const hp = Math.max(0, Math.min(100, Number(data.hp) || 0));
+            players[socket.id].hp = hp;
+            socket.broadcast.emit('hpSync', { id: socket.id, hp });
+        } catch (e) { console.error('[HPSYNC ERROR]', e.message); }
     });
 
     // Restored original playerDied — always broadcasts io.emit so ALL clients update state
