@@ -128,6 +128,8 @@ function startNPCAI() {
                 for (const pid in players) {
                     const p = players[pid];
                     if (!p || (p.hp || 0) <= 0) continue;
+                    // Skip players with spawn protection (3 seconds after spawn)
+                    if (p.spawnedAt && (Date.now() - p.spawnedAt) < 3000) continue;
                     const d = Math.sqrt((npc.x - p.x) ** 2 + (npc.y - p.y) ** 2);
                     if (d < nearestDist) { nearestDist = d; nearest = { id: pid, ...p }; }
                 }
@@ -137,6 +139,19 @@ function startNPCAI() {
                 const dy = nearest.y - npc.y;
                 const dist = nearestDist;
                 if (dist === 0) continue;
+
+                // NPC separation: push away from other NPCs so they don't clump
+                let sepX = 0, sepY = 0;
+                for (const otherId in npcs) {
+                    if (otherId === npcId) continue;
+                    const other = npcs[otherId];
+                    if (!other || other.phase !== 'alive') continue;
+                    const sx = npc.x - other.x, sy = npc.y - other.y;
+                    const sd = Math.sqrt(sx * sx + sy * sy);
+                    if (sd < 60 && sd > 0) { sepX += (sx / sd) * (60 - sd); sepY += (sy / sd) * (60 - sd); }
+                }
+                npc.x += sepX * 0.15;
+                npc.y += sepY * 0.15;
 
                 if (npc.rarity === 'mythic') {
                     npc.angle = Math.atan2(-dy, -dx);
@@ -216,6 +231,7 @@ function startBossAI() {
                 for (const id in players) {
                     const p = players[id];
                     if (!p) continue;
+                    if (p.spawnedAt && (Date.now() - p.spawnedAt) < 3000) continue;
                     const d = Math.sqrt((b.x - p.x) ** 2 + (b.y - p.y) ** 2);
                     if (d < nearestDist) { nearestDist = d; nearest = { id, ...p }; }
                 }
@@ -283,8 +299,6 @@ io.on('connection', (socket) => {
             if (!data || !data.name) { socket.emit('joinError', { message: 'Invalid join data' }); return; }
             if (data.userId && activeSessions[data.userId]) {
                 const existingSocketId = activeSessions[data.userId];
-                // Don't block reconnects — if same userId joins with a NEW socket,
-                // kick the old session rather than rejecting the new one.
                 if (existingSocketId !== socket.id) {
                     const existingSocket = io.sockets.sockets.get(existingSocketId);
                     if (existingSocket && existingSocket.connected) {
@@ -299,12 +313,13 @@ io.on('connection', (socket) => {
                 }
             }
             if (data.userId) activeSessions[data.userId] = socket.id;
-            const playerName = (String(data.name || '').substring(0, 15).trim()) || 'Guest';
+            const playerName = String(data.name).substring(0, 15).trim() || 'Guest';
             players[socket.id] = {
                 id: socket.id, userId: data.userId || null, name: playerName,
                 x: Math.random() * (MAP_SIZE - 200) + 100, y: Math.random() * (MAP_SIZE - 200) + 100,
                 angle: 0, hp: 100, kills: 0, currentPower: null,
-                speedActive: false, berserkerActive: false, phaseActive: false
+                speedActive: false, berserkerActive: false, phaseActive: false,
+                spawnedAt: Date.now()
             };
             socket.emit('joinSuccess');
             socket.broadcast.emit('playerJoined', players[socket.id]);
@@ -366,6 +381,7 @@ io.on('connection', (socket) => {
                 players[data.victimId].x = Math.random() * (MAP_SIZE - 200) + 100;
                 players[data.victimId].y = Math.random() * (MAP_SIZE - 200) + 100;
                 players[data.victimId].currentPower = null;
+                players[data.victimId].spawnedAt = Date.now();
             }
             if (data.killerId && players[data.killerId]) {
                 players[data.killerId].kills = (players[data.killerId].kills || 0) + 1;
