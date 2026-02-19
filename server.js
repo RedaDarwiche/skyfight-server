@@ -23,176 +23,280 @@ const powerups = {};
 const activeSessions = {};
 let powerupId = 0;
 
-// ✅ ENHANCED: Added 5 new powers + maintained all existing powers
 const POWER_TYPES = [
-    'dash', 'teleport', 'clone', 'blackhole', 'nuke', 'heal', 'emp', 
-    'swap', 'shockwave', 'speed', 'phase', 'berserker', 'shield', 
-    'vampire', 'rage', 'tank', 'magnet', 'thorns', 'regeneration', 
-    'tripleshot', 'laser', 'rocket', 'scatter', 'sniper', 'minigun', 
+    'dash', 'teleport', 'clone', 'blackhole', 'nuke', 'heal', 'emp',
+    'swap', 'shockwave', 'speed', 'phase', 'berserker', 'shield',
+    'vampire', 'rage', 'tank', 'magnet', 'thorns', 'regeneration',
+    'tripleshot', 'laser', 'rocket', 'scatter', 'sniper', 'minigun',
     'explosive', 'freeze', 'poison', 'lightning',
     'timebomb', 'orbitallaser', 'shadowclone', 'frostnova',
     'soulrip', 'voidbeam', 'gravitypull', 'mirror', 'chaos'
-    // NOTE: 'baby' intentionally excluded - spawned via admin/special only
 ];
 
 const LEGENDARY_DROPS = ['orbitallaser', 'frostnova', 'chaos', 'voidbeam', 'nuke', 'blackhole', 'clone', 'lightning'];
 const MYTHIC_DROPS = ['baby', 'phoenix', 'soulsteal'];
 
-// Boss state — supports multiple simultaneous bosses
+// ── NPC System ──────────────────────────────────────────────────
+const NPC_CONFIGS = {
+    common:    { maxHp: 60,   speed: 1.4, attackDmg: 5,  attackRange: 100, radius: 18, color: '#9ca3af', respawnMs: 1000,   dropCount: 2 },
+    rare:      { maxHp: 150,  speed: 1.8, attackDmg: 10, attackRange: 110, radius: 20, color: '#3b82f6', respawnMs: 2000,   dropCount: 2 },
+    epic:      { maxHp: 320,  speed: 2.1, attackDmg: 18, attackRange: 120, radius: 23, color: '#a855f7', respawnMs: 3000,   dropCount: 2 },
+    legendary: { maxHp: 750,  speed: 2.8, attackDmg: 28, attackRange: 130, radius: 27, color: '#f59e0b', respawnMs: 4000,   dropCount: 2 },
+    mythic:    { maxHp: 1500, speed: 0.9, attackDmg: 35, attackRange: 380, radius: 32, color: '#ff00cc', respawnMs: 300000, dropCount: 2 }
+};
+
+const RARITY_POWER_POOL = {
+    common:    ['dash', 'heal', 'speed', 'shield', 'magnet', 'tripleshot'],
+    rare:      ['teleport', 'emp', 'shockwave', 'berserker', 'rage', 'tank', 'thorns', 'regeneration', 'scatter', 'minigun', 'freeze', 'poison', 'laser'],
+    epic:      ['clone', 'swap', 'phase', 'vampire', 'rocket', 'explosive', 'timebomb', 'shadowclone', 'gravitypull', 'mirror', 'sniper', 'lightning'],
+    legendary: ['blackhole', 'nuke', 'orbitallaser', 'frostnova', 'soulrip', 'voidbeam', 'chaos'],
+    mythic:    ['baby', 'phoenix', 'soulsteal']
+};
+
+const NPC_SPAWN_SLOTS = [
+    { rarity: 'common' }, { rarity: 'common' }, { rarity: 'common' },
+    { rarity: 'rare' }, { rarity: 'rare' },
+    { rarity: 'epic' }, { rarity: 'epic' },
+    { rarity: 'legendary' },
+    { rarity: 'mythic' }
+];
+
+const npcs = {};
+let npcIdCounter = 0;
+
+function spawnNPC(rarity, slotIdx) {
+    const cfg = NPC_CONFIGS[rarity];
+    if (!cfg) return null;
+    const id = `npc_${npcIdCounter++}_${rarity}`;
+    npcs[id] = {
+        id, rarity, slotIdx,
+        x: Math.random() * (MAP_SIZE - 600) + 300,
+        y: Math.random() * (MAP_SIZE - 600) + 300,
+        hp: cfg.maxHp, maxHp: cfg.maxHp,
+        angle: 0,
+        attackTimer: 0,
+        phase: 'alive',
+        color: cfg.color,
+        radius: cfg.radius,
+        speed: cfg.speed,
+        attackDmg: cfg.attackDmg,
+        attackRange: cfg.attackRange,
+        dropCount: cfg.dropCount,
+        respawnMs: cfg.respawnMs
+    };
+    io.emit('npcSpawn', npcs[id]);
+    return id;
+}
+
+function handleNPCDeath(npc, killerId) {
+    const cfg = NPC_CONFIGS[npc.rarity];
+    if (!cfg) return;
+    const pool = RARITY_POWER_POOL[npc.rarity] || RARITY_POWER_POOL.common;
+    const drops = [];
+    for (let i = 0; i < npc.dropCount; i++) {
+        const type = pool[Math.floor(Math.random() * pool.length)];
+        const angle = (i / npc.dropCount) * Math.PI * 2;
+        const id = `npc_drop_${Date.now()}_${i}`;
+        const drop = {
+            id, type,
+            x: npc.x + Math.cos(angle) * 50,
+            y: npc.y + Math.sin(angle) * 50
+        };
+        powerups[id] = drop;
+        drops.push(drop);
+    }
+    io.emit('npcDied', { npcId: npc.id, killerId, x: npc.x, y: npc.y, rarity: npc.rarity, drops });
+    const killerName = players[killerId] ? players[killerId].name : 'Someone';
+    if (npc.rarity === 'legendary' || npc.rarity === 'mythic') {
+        io.emit('announcement', { message: `[ KILL ] ${killerName} slew a ${npc.rarity.toUpperCase()} NPC!` });
+    }
+    const slotIdx = npc.slotIdx;
+    delete npcs[npc.id];
+    setTimeout(() => {
+        spawnNPC(npc.rarity, slotIdx);
+    }, cfg.respawnMs);
+}
+
+// NPC AI loop
+let npcAIInterval = null;
+function startNPCAI() {
+    if (npcAIInterval) return;
+    npcAIInterval = setInterval(() => {
+        for (const npcId in npcs) {
+            const npc = npcs[npcId];
+            if (!npc || npc.phase !== 'alive') continue;
+
+            // Find nearest player
+            let nearest = null, nearestDist = Infinity;
+            for (const pid in players) {
+                const p = players[pid];
+                if (!p || (p.hp || 0) <= 0) continue;
+                const d = Math.sqrt((npc.x - p.x) ** 2 + (npc.y - p.y) ** 2);
+                if (d < nearestDist) { nearestDist = d; nearest = { id: pid, ...p }; }
+            }
+            if (!nearest) continue;
+
+            const dx = nearest.x - npc.x;
+            const dy = nearest.y - npc.y;
+            const dist = nearestDist;
+
+            if (npc.rarity === 'mythic') {
+                npc.angle = Math.atan2(-dy, -dx);
+                if (dist < 600) {
+                    npc.x -= (dx / dist) * npc.speed * 15;
+                    npc.y -= (dy / dist) * npc.speed * 15;
+                    npc.x = Math.max(100, Math.min(MAP_SIZE - 100, npc.x));
+                    npc.y = Math.max(100, Math.min(MAP_SIZE - 100, npc.y));
+                }
+                npc.attackTimer++;
+                if (npc.attackTimer >= 5) {
+                    npc.attackTimer = 0;
+                    for (const pid in players) {
+                        const p = players[pid];
+                        if (!p || (p.hp || 0) <= 0) continue;
+                        const d = Math.sqrt((npc.x - p.x) ** 2 + (npc.y - p.y) ** 2);
+                        if (d < npc.attackRange) {
+                            players[pid].hp = Math.max(0, (players[pid].hp || 100) - npc.attackDmg);
+                            io.to(pid).emit('playerHit', { targetId: pid, damage: npc.attackDmg, attackerId: npc.id });
+                        }
+                    }
+                }
+            } else {
+                npc.angle = Math.atan2(dy, dx);
+                if (dist > 80) {
+                    npc.x += (dx / dist) * npc.speed * 15;
+                    npc.y += (dy / dist) * npc.speed * 15;
+                    npc.x = Math.max(100, Math.min(MAP_SIZE - 100, npc.x));
+                    npc.y = Math.max(100, Math.min(MAP_SIZE - 100, npc.y));
+                }
+                // Melee attack
+                npc.attackTimer++;
+                const attackFreq = npc.rarity === 'legendary' ? 2 : 3;
+                if (npc.attackTimer >= attackFreq) {
+                    npc.attackTimer = 0;
+                    for (const pid in players) {
+                        const p = players[pid];
+                        if (!p || (p.hp || 0) <= 0) continue;
+                        const d = Math.sqrt((npc.x - p.x) ** 2 + (npc.y - p.y) ** 2);
+                        if (d < npc.attackRange) {
+                            players[pid].hp = Math.max(0, (players[pid].hp || 100) - npc.attackDmg);
+                            io.to(pid).emit('playerHit', { targetId: pid, damage: npc.attackDmg, attackerId: npc.id });
+                        }
+                    }
+                }
+            }
+            io.emit('npcMoved', { npcId: npc.id, x: npc.x, y: npc.y, angle: npc.angle, hp: npc.hp });
+        }
+    }, 200);
+}
+
+// ── Boss system ────────────────────────────────────────────────
 const bosses = {};
 let bossSpawnTimer = null;
 
 function spawnBoss(label) {
     const id = `boss_${Date.now()}_${label}`;
-    // Spawn the two bosses on opposite sides of the map
     const side = label === 'A'
         ? { x: 500 + Math.random() * 1000, y: 500 + Math.random() * 1000 }
         : { x: MAP_SIZE - 1500 + Math.random() * 1000, y: MAP_SIZE - 1500 + Math.random() * 1000 };
-    bosses[id] = {
-        id,
-        label,
-        x: side.x,
-        y: side.y,
-        hp: 1000,
-        maxHp: 1000,
-        angle: 0,
-        speed: 1.2,
-        phase: 'alive',
-        attackTimer: 0
-    };
+    bosses[id] = { id, label, x: side.x, y: side.y, hp: 1000, maxHp: 1000, angle: 0, speed: 1.2, phase: 'alive', attackTimer: 0 };
     console.log(`[BOSS ${label}] Spawned at (${Math.round(side.x)}, ${Math.round(side.y)})`);
     io.emit('bossSpawn', bosses[id]);
 }
 
 let bossAIInterval = null;
 function startBossAI() {
-    if (bossAIInterval) return; // already running
+    if (bossAIInterval) return;
     bossAIInterval = setInterval(() => {
         for (const bossId in bosses) {
             const b = bosses[bossId];
             if (!b || b.phase !== 'alive') continue;
-
-            // Find nearest player
             let nearest = null, nearestDist = Infinity;
             for (const id in players) {
                 const p = players[id];
+                if (!p || (p.hp || 0) <= 0) continue;
                 const d = Math.sqrt((b.x - p.x) ** 2 + (b.y - p.y) ** 2);
                 if (d < nearestDist) { nearestDist = d; nearest = { id, ...p }; }
             }
-
-            if (nearest) {
-                const dx = nearest.x - b.x;
-                const dy = nearest.y - b.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                b.angle = Math.atan2(dy, dx);
-                if (dist > 80) {
-                    b.x += (dx / dist) * b.speed * 15;
-                    b.y += (dy / dist) * b.speed * 15;
-                    b.x = Math.max(100, Math.min(MAP_SIZE - 100, b.x));
-                    b.y = Math.max(100, Math.min(MAP_SIZE - 100, b.y));
-                }
-
-                b.attackTimer++;
-                if (b.attackTimer >= 3) {
-                    b.attackTimer = 0;
-                    for (const id in players) {
-                        const p = players[id];
-                        if ((p.hp || 0) <= 0) continue; // skip dead players
-                        const d = Math.sqrt((b.x - p.x) ** 2 + (b.y - p.y) ** 2);
-                        if (d < 120) {
-                            players[id].hp = Math.max(0, (players[id].hp || 100) - 15);
-                            io.to(id).emit('playerHit', { targetId: id, damage: 15, attackerId: 'boss' });
-                        }
+            if (!nearest) continue;
+            const dx = nearest.x - b.x, dy = nearest.y - b.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            b.angle = Math.atan2(dy, dx);
+            if (dist > 80) {
+                b.x += (dx / dist) * b.speed * 15;
+                b.y += (dy / dist) * b.speed * 15;
+                b.x = Math.max(100, Math.min(MAP_SIZE - 100, b.x));
+                b.y = Math.max(100, Math.min(MAP_SIZE - 100, b.y));
+            }
+            b.attackTimer++;
+            if (b.attackTimer >= 3) {
+                b.attackTimer = 0;
+                for (const id in players) {
+                    const p = players[id];
+                    if (!p || (p.hp || 0) <= 0) continue;
+                    const d = Math.sqrt((b.x - p.x) ** 2 + (b.y - p.y) ** 2);
+                    if (d < 120) {
+                        players[id].hp = Math.max(0, (players[id].hp || 100) - 15);
+                        io.to(id).emit('playerHit', { targetId: id, damage: 15, attackerId: 'boss' });
                     }
                 }
-                io.emit('bossMoved', { bossId, x: b.x, y: b.y, angle: b.angle, hp: b.hp });
             }
+            io.emit('bossMoved', { bossId, x: b.x, y: b.y, angle: b.angle, hp: b.hp });
         }
     }, 200);
 }
 
-// Spawn powerup
+// ── Powerup spawn ─────────────────────────────────────────────
 function spawnPowerup() {
     const id = `pu_${powerupId++}`;
     const type = POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)];
-    powerups[id] = { 
-        id, 
-        x: Math.random() * (MAP_SIZE - 100) + 50, 
-        y: Math.random() * (MAP_SIZE - 100) + 50, 
-        type 
-    };
+    powerups[id] = { id, x: Math.random() * (MAP_SIZE - 100) + 50, y: Math.random() * (MAP_SIZE - 100) + 50, type };
     io.emit('powerupSpawn', powerups[id]);
 }
 
-// ✅ ENHANCED: Increased initial powerup spawn from 50 to 80
 console.log('Spawning initial powerups...');
 for (let i = 0; i < 80; i++) {
     const id = `pu_${powerupId++}`;
     const type = POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)];
-    powerups[id] = { 
-        id, 
-        x: Math.random() * (MAP_SIZE - 100) + 50, 
-        y: Math.random() * (MAP_SIZE - 100) + 50, 
-        type 
-    };
+    powerups[id] = { id, x: Math.random() * (MAP_SIZE - 100) + 50, y: Math.random() * (MAP_SIZE - 100) + 50, type };
 }
-console.log(`✅ Spawned ${Object.keys(powerups).length} initial powerups`);
+
+// Spawn initial NPCs
+NPC_SPAWN_SLOTS.forEach((slot, idx) => spawnNPC(slot.rarity, idx));
+startNPCAI();
+console.log(`Spawned ${Object.keys(powerups).length} powerups and ${Object.keys(npcs).length} NPCs`);
 
 // Health endpoints
-app.get('/', (req, res) => {
-    res.json({ 
-        status: 'ok', 
-        players: Object.keys(players).length,
-        powerups: Object.keys(powerups).length,
-        uptime: process.uptime()
-    });
-});
+app.get('/', (req, res) => res.json({
+    status: 'ok',
+    players: Object.keys(players).length,
+    powerups: Object.keys(powerups).length,
+    npcs: Object.keys(npcs).length,
+    uptime: process.uptime()
+}));
+app.get('/health', (req, res) => res.json({ status: 'healthy', timestamp: Date.now() }));
 
-app.get('/health', (req, res) => {
-    res.json({ status: 'healthy', timestamp: Date.now() });
-});
-
-// Socket.IO connection
+// ── Socket.IO connection ──────────────────────────────────────
 io.on('connection', (socket) => {
     console.log(`[CONNECT] ${socket.id}`);
 
     socket.on('join', (data) => {
-        console.log(`[JOIN] ${data.name} attempting to join (userId: ${data.userId || 'guest'})`);
-
-        // Validate
         if (!data || !data.name) {
-            console.log(`[ERROR] Invalid join data from ${socket.id}`);
             socket.emit('joinError', { message: 'Invalid join data' });
             return;
         }
-
-        // Check duplicate session
         if (data.userId && activeSessions[data.userId]) {
             const existingSocketId = activeSessions[data.userId];
             const existingSocket = io.sockets.sockets.get(existingSocketId);
-            
             if (existingSocket && existingSocket.connected) {
-                console.log(`[BLOCKED] Duplicate session for userId: ${data.userId}`);
-                socket.emit('duplicateSession', { 
-                    message: 'This account is already playing in another session!' 
-                });
+                socket.emit('duplicateSession', { message: 'This account is already playing in another session!' });
                 return;
             } else {
-                console.log(`[CLEANUP] Removing stale session for userId: ${data.userId}`);
                 delete activeSessions[data.userId];
-                if (players[existingSocketId]) {
-                    delete players[existingSocketId];
-                }
+                if (players[existingSocketId]) delete players[existingSocketId];
             }
         }
-
-        // Register session
-        if (data.userId) {
-            activeSessions[data.userId] = socket.id;
-            console.log(`[SESSION] Registered userId ${data.userId} → ${socket.id}`);
-        }
-
-        // Create player
+        if (data.userId) activeSessions[data.userId] = socket.id;
         const playerName = String(data.name).substring(0, 15).trim() || 'Guest';
         players[socket.id] = {
             id: socket.id,
@@ -200,76 +304,60 @@ io.on('connection', (socket) => {
             name: playerName,
             x: Math.random() * (MAP_SIZE - 200) + 100,
             y: Math.random() * (MAP_SIZE - 200) + 100,
-            angle: 0,
-            hp: 100,
-            kills: 0,
-            currentPower: null,
-            speedActive: false,
-            berserkerActive: false,
-            phaseActive: false
+            angle: 0, hp: 100, kills: 0, currentPower: null,
+            speedActive: false, berserkerActive: false, phaseActive: false
         };
-
-        console.log(`[✓] ${playerName} (${socket.id}) spawned at (${Math.round(players[socket.id].x)}, ${Math.round(players[socket.id].y)})`);
-
-        // Send init data
+        socket.emit('joinSuccess');
+        socket.broadcast.emit('playerJoined', players[socket.id]);
         socket.emit('init', {
             player: players[socket.id],
             players: players,
             powerups: powerups,
-            projectiles: {},
-            bosses: bosses
+            bosses: bosses,
+            npcs: npcs
         });
-
-        // Send join success
-        socket.emit('joinSuccess');
-        console.log(`[SUCCESS] joinSuccess sent to ${socket.id}`);
-
-        // Notify others
-        socket.broadcast.emit('playerJoined', players[socket.id]);
-        console.log(`[PLAYERS] Total online: ${Object.keys(players).length}`);
+        console.log(`[JOIN] ${playerName} | Total: ${Object.keys(players).length}`);
     });
 
-    // Movement
     socket.on('move', (data) => {
-        if (!players[socket.id] || !data) return;
-        // Whitelist only safe fields - never allow overwriting id/userId/name/etc.
-        const allowed = ['x','y','angle','kills','currentPower','hp','speedActive','berserkerActive','phaseActive','mirrorActive','isOwner'];
-        for (const key of allowed) {
-            if (data[key] !== undefined) players[socket.id][key] = data[key];
-        }
-        socket.broadcast.emit('playerMoved', { id: socket.id, ...data });
+        if (!players[socket.id]) return;
+        const p = players[socket.id];
+        if (typeof data.x === 'number') p.x = Math.max(0, Math.min(MAP_SIZE, data.x));
+        if (typeof data.y === 'number') p.y = Math.max(0, Math.min(MAP_SIZE, data.y));
+        p.angle = data.angle || 0;
+        p.currentPower = data.currentPower || null;
+        p.speedActive = !!data.speedActive;
+        p.berserkerActive = !!data.berserkerActive;
+        p.phaseActive = !!data.phaseActive;
+        p.mirrorActive = !!data.mirrorActive;
+        p.isOwner = !!data.isOwner;
+        socket.broadcast.emit('playerMoved', {
+            id: socket.id,
+            x: p.x, y: p.y, angle: p.angle,
+            currentPower: p.currentPower, hp: p.hp, kills: p.kills,
+            speedActive: p.speedActive, berserkerActive: p.berserkerActive,
+            phaseActive: p.phaseActive, mirrorActive: p.mirrorActive,
+            isOwner: p.isOwner
+        });
     });
 
-    // Shooting
     socket.on('shoot', (data) => {
-        if (!players[socket.id]) return;
-        data.ownerId = socket.id;
-        socket.broadcast.emit('remoteShoot', data);
+        socket.broadcast.emit('remoteShoot', { ...data, ownerId: socket.id });
     });
 
-    // Abilities
     socket.on('abilityUsed', (data) => {
-        if (!players[socket.id]) return;
-        socket.broadcast.emit('abilityEffect', data);
+        socket.broadcast.emit('abilityEffect', { ...data, id: socket.id });
     });
 
-    // Hits
+    // FIX: was using socket.broadcast.except() which does not exist in Socket.IO
+    // playerHit only needs to go to the target player
     socket.on('playerHit', (data) => {
-        if (!data || !data.targetId || typeof data.damage !== 'number') return;
-        if (players[data.targetId]) {
-            players[data.targetId].hp = Math.min(100, Math.max(0, (players[data.targetId].hp || 100) - data.damage));
-        }
-        // Send directly to target only once, then broadcast to others for visual effects
-        const targetSock = io.sockets.sockets.get(data.targetId);
-        if (targetSock) io.to(data.targetId).emit('playerHit', data);
-        // Skip target in broadcast to prevent double-hit
-        socket.broadcast.except(data.targetId).emit('playerHit', data);
+        if (!data || !data.targetId) return;
+        io.to(data.targetId).emit('playerHit', data);
     });
 
-    // Death
     socket.on('playerDied', (data) => {
-        console.log(`[DEATH] ${data.victimId} killed by ${data.killerId}`);
-        
+        if (!data || !data.victimId) return;
         if (players[data.victimId]) {
             players[data.victimId].hp = 100;
             players[data.victimId].kills = 0;
@@ -277,16 +365,14 @@ io.on('connection', (socket) => {
             players[data.victimId].y = Math.random() * (MAP_SIZE - 200) + 100;
             players[data.victimId].currentPower = null;
         }
-
         if (data.killerId && players[data.killerId]) {
             players[data.killerId].kills = (players[data.killerId].kills || 0) + 1;
         }
-
         io.emit('playerDied', data);
     });
 
-    // Powerups
     socket.on('powerupTaken', (data) => {
+        if (!data || !data.id) return;
         if (powerups[data.id]) {
             delete powerups[data.id];
             io.emit('powerupTaken', data.id);
@@ -297,17 +383,20 @@ io.on('connection', (socket) => {
     socket.on('dropPower', (data) => {
         if (!data || !data.type || !POWER_TYPES.includes(data.type)) return;
         if (typeof data.x !== 'number' || typeof data.y !== 'number') return;
-        const safeX = Math.max(50, Math.min(MAP_SIZE - 50, data.x));
-        const safeY = Math.max(50, Math.min(MAP_SIZE - 50, data.y));
         const id = `drop_${Date.now()}_${socket.id}`;
-        powerups[id] = { id, type: data.type, x: safeX, y: safeY };
+        powerups[id] = {
+            id, type: data.type,
+            x: Math.max(50, Math.min(MAP_SIZE - 50, data.x)),
+            y: Math.max(50, Math.min(MAP_SIZE - 50, data.y))
+        };
         io.emit('powerupSpawn', powerups[id]);
     });
 
-    // Swap positions (true position swap between two players)
     socket.on('swapPositions', (data) => {
+        if (!data || !data.targetId) return;
         const { targetId, myOldX, myOldY } = data;
         if (!players[socket.id] || !players[targetId]) return;
+        if (typeof myOldX !== 'number' || typeof myOldY !== 'number') return;
         const targetSocket = io.sockets.sockets.get(targetId);
         if (targetSocket && targetSocket.connected) {
             targetSocket.emit('forceMovePlayer', { x: myOldX, y: myOldY });
@@ -317,21 +406,34 @@ io.on('connection', (socket) => {
         io.emit('playerMoved', { id: targetId, x: myOldX, y: myOldY, angle: players[targetId].angle });
     });
 
-    // Boss hit — client must send bossId
+    socket.on('npcHit', (data) => {
+        if (!data || !data.npcId) return;
+        const npc = npcs[data.npcId];
+        if (!npc || npc.phase !== 'alive') return;
+        if (typeof data.damage !== 'number' || data.damage <= 0) return;
+        npc.hp = Math.max(0, npc.hp - data.damage);
+        io.emit('npcMoved', { npcId: npc.id, x: npc.x, y: npc.y, angle: npc.angle, hp: npc.hp });
+        if (npc.hp <= 0 && npc.phase === 'alive') {
+            npc.phase = 'dead';
+            handleNPCDeath(npc, socket.id);
+        }
+    });
+
+    socket.on('useEmote', (data) => {
+        if (!players[socket.id] || !data || !data.emote) return;
+        socket.broadcast.emit('playerEmote', { playerId: socket.id, emote: data.emote });
+    });
+
     socket.on('bossHit', (data) => {
+        if (!data || !data.bossId) return;
         const b = bosses[data.bossId];
         if (!b || b.phase !== 'alive') return;
-        if (typeof data.damage !== 'number' || data.damage <= 0) return; // reject invalid/negative damage
-        b.hp -= data.damage;
-        if (b.hp <= 0) b.hp = 0;
+        if (typeof data.damage !== 'number' || data.damage <= 0) return;
+        b.hp = Math.max(0, b.hp - data.damage);
         io.emit('bossMoved', { bossId: b.id, x: b.x, y: b.y, angle: b.angle, hp: b.hp });
-
         if (b.hp <= 0 && b.phase === 'alive') {
             b.phase = 'dead';
-            const killerName = players[socket.id]?.name || 'Unknown';
-            console.log(`[BOSS ${b.label}] Defeated by ${killerName}`);
-
-            // 4 legendary drops + 1 mythic drop (from extended mythic list)
+            const killerName = players[socket.id] ? players[socket.id].name : 'Unknown';
             const drops = [];
             for (let i = 0; i < 4; i++) {
                 const type = LEGENDARY_DROPS[Math.floor(Math.random() * LEGENDARY_DROPS.length)];
@@ -341,133 +443,99 @@ io.on('connection', (socket) => {
                 powerups[id] = drop;
                 drops.push(drop);
             }
-            // Mythic drop — random from all 4 mythics
             const mythicType = MYTHIC_DROPS[Math.floor(Math.random() * MYTHIC_DROPS.length)];
             const mythicId = `boss_mythic_${Date.now()}`;
             const mythicDrop = { id: mythicId, type: mythicType, x: b.x, y: b.y };
             powerups[mythicId] = mythicDrop;
             drops.push(mythicDrop);
-
-            io.emit('bossDied', {
-                bossId: b.id,
-                killerId: socket.id,
-                killerName,
-                bossX: b.x,
-                bossY: b.y,
-                drops
-            });
-            io.emit('announcement', { message: `💀 Boss ${b.label} slain by ${killerName}! Legendary loot dropped!` });
-
+            io.emit('bossDied', { bossId: b.id, killerId: socket.id, killerName, bossX: b.x, bossY: b.y, drops });
+            io.emit('announcement', { message: `[ BOSS DEFEATED ] Boss ${b.label} slain by ${killerName}! Legendary loot dropped!` });
             delete bosses[b.id];
-
-            // Respawn this boss slot after 5 minutes
-            setTimeout(() => { spawnBoss(b.label); startBossAI(); }, 5 * 60 * 1000);
+            const respawnLabel = b.label;
+            setTimeout(() => { spawnBoss(respawnLabel); startBossAI(); }, 5 * 60 * 1000);
         }
     });
 
-    // Admin spawn boss
     socket.on('adminSpawnBoss', () => {
         if (!players[socket.id]) return;
         const count = Object.keys(bosses).length;
-        if (count >= 2) { io.to(socket.id).emit('announcement', { message: 'Both bosses are already alive!' }); return; }
+        if (count >= 2) {
+            io.to(socket.id).emit('announcement', { message: 'Both bosses are already alive!' });
+            return;
+        }
         const label = Object.values(bosses).some(b => b.label === 'A') ? 'B' : 'A';
         spawnBoss(label);
         startBossAI();
-        io.emit('announcement', { message: '⚠️ Bosses that drop Mythic/Legendary powers have spawned!' });
+        io.emit('announcement', { message: 'Boss spawned by admin!' });
     });
 
-    // Admin announcement
     socket.on('adminAnnouncement', (data) => {
         if (!data || !data.message) return;
-        const sanitized = String(data.message).substring(0, 150);
-        io.emit('announcement', { message: sanitized });
+        io.emit('announcement', { message: String(data.message).substring(0, 150) });
     });
 
-    // Chat
     socket.on('chatMessage', (data) => {
-        if (!data.text || !data.playerName) return;
-        const sanitized = {
+        if (!data || !data.text || !data.playerName) return;
+        io.emit('chatMessage', {
             text: String(data.text).substring(0, 100),
             playerName: String(data.playerName).substring(0, 15)
-        };
-        io.emit('chatMessage', sanitized);
+        });
     });
 
-    // Disconnect
-    socket.on('disconnect', (reason) => {
-        console.log(`[DISCONNECT] ${socket.id} - Reason: ${reason}`);
-        
+    socket.on('disconnect', () => {
         if (players[socket.id] && players[socket.id].userId) {
             delete activeSessions[players[socket.id].userId];
         }
-        
-        const playerName = players[socket.id]?.name || 'Unknown';
+        const name = players[socket.id] ? players[socket.id].name : 'Unknown';
         delete players[socket.id];
         io.emit('playerLeft', socket.id);
-        console.log(`[LEFT] ${playerName} - Total online: ${Object.keys(players).length}`);
+        console.log(`[LEFT] ${name} | Total: ${Object.keys(players).length}`);
     });
 });
 
 // Cleanup stale sessions
 setInterval(() => {
     const connectedSockets = Array.from(io.sockets.sockets.keys());
-    
     for (const playerId in players) {
         if (!connectedSockets.includes(playerId)) {
-            if (players[playerId].userId) {
+            if (players[playerId] && players[playerId].userId) {
                 delete activeSessions[players[playerId].userId];
             }
             delete players[playerId];
             io.emit('playerLeft', playerId);
         }
     }
-    
     for (const userId in activeSessions) {
-        const socketId = activeSessions[userId];
-        if (!connectedSockets.includes(socketId)) {
+        if (!connectedSockets.includes(activeSessions[userId])) {
             delete activeSessions[userId];
         }
     }
 }, 30000);
 
-// ✅ ENHANCED: Increased minimum powerup threshold from 30 to 50
+// Powerup top-up interval
 setInterval(() => {
     const minPowerups = 50;
     const currentCount = Object.keys(powerups).length;
-    
     if (currentCount < minPowerups) {
         const toSpawn = minPowerups - currentCount;
-        console.log(`[POWERUP] Spawning ${toSpawn} powerups to maintain minimum (current: ${currentCount})`);
-        for (let i = 0; i < toSpawn; i++) {
-            spawnPowerup();
-        }
+        for (let i = 0; i < toSpawn; i++) spawnPowerup();
     }
 }, 10000);
 
-// Graceful shutdown
 process.on('SIGTERM', () => {
-    console.log('SIGTERM received. Shutting down...');
     io.emit('serverShutdown', { message: 'Server restarting...' });
     server.close(() => process.exit(0));
 });
 
 server.listen(PORT, () => {
-    console.log(`
-╔═══════════════════════════════════════╗
-║   PowerSwap Server Running             ║
-║   Port: ${PORT}                        ║
-║   Map: ${MAP_SIZE}x${MAP_SIZE}         ║
-║   Initial Powerups: ${Object.keys(powerups).length}                    ║
-║   Minimum Powerups: 50                 ║
-╚═══════════════════════════════════════╝
-    `);
-
-    // Spawn 2 bosses after 5 minutes
+    console.log(`\n PowerSwap Server Running`);
+    console.log(` Port: ${PORT} | Map: ${MAP_SIZE}x${MAP_SIZE}`);
+    console.log(` NPCs: ${Object.keys(npcs).length} | Powerups: ${Object.keys(powerups).length}\n`);
     bossSpawnTimer = setTimeout(() => {
         spawnBoss('A');
         spawnBoss('B');
         startBossAI();
-        io.emit('announcement', { message: '⚠️ Bosses that drop Mythic/Legendary powers have spawned!' });
+        io.emit('announcement', { message: 'Bosses that drop Mythic/Legendary powers have spawned!' });
     }, 5 * 60 * 1000);
     console.log('[BOSS] 2 Bosses spawn in 5 minutes!');
 });
